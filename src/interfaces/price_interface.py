@@ -1590,6 +1590,15 @@ class PriceInterface(ForecastMetadataMixin):
         )
         return False
 
+    def _can_learn_a_forecast(self):
+        """Whether asking energyforecast.de is worth a try at all.
+
+        The first two conditions the fallback itself checks, read here as well
+        so a source that cannot use it does not open the fallback chain on
+        every cycle only to be turned away with a log line.
+        """
+        return self.energyforecast_enabled and self.price_currency == "EUR"
+
     def _fetch_adaptive_energyforecast_fallback(
         self, known_prices_with_ts=None, known_prices=None, num_missing_hours=None
     ):
@@ -2225,15 +2234,43 @@ class PriceInterface(ForecastMetadataMixin):
             )
             is_valid_complete_data = 0 < complete_days <= 2
 
+            # A whole day is data worth trusting, and repeating it is a sound
+            # guess for tomorrow - while there is nothing better. With
+            # energyforecast configured there is: it learns what today's rates
+            # make of the spot price and prices tomorrow from the prediction.
+            # So that chain gets its turn, and the repetition stays as the
+            # thing it falls back to.
+            #
+            # Short-circuiting here instead meant tomorrow was a bit-exact copy
+            # of today for everyone whose EVCC serves whole days, however the
+            # smart forecast was configured - and the copy looks plausible
+            # enough on the chart that nobody could tell.
+            cyclic_fill_is_sound = is_valid_complete_data
+            learned_forecast_possible = (
+                is_valid_complete_data
+                and self._can_learn_a_forecast()
+                and window.real_slots < expected_slots
+            )
+
             if is_incomplete and is_valid_complete_data:
-                logger.debug(
-                    "[PRICE-IF] EVCC provided %d complete day(s) in %d entries — "
-                    "treating as valid complete data and using cyclic pattern "
-                    "for gap-filling",
-                    complete_days,
-                    actual_timeseries_count,
-                )
-                is_incomplete = False
+                if learned_forecast_possible:
+                    logger.debug(
+                        "[PRICE-IF] EVCC provided %d complete day(s) in %d "
+                        "entries - asking energyforecast.de for the %d slots it "
+                        "does not cover, today's pattern stays as the fallback",
+                        complete_days,
+                        actual_timeseries_count,
+                        expected_slots - window.real_slots,
+                    )
+                else:
+                    logger.debug(
+                        "[PRICE-IF] EVCC provided %d complete day(s) in %d entries — "
+                        "treating as valid complete data and using cyclic pattern "
+                        "for gap-filling",
+                        complete_days,
+                        actual_timeseries_count,
+                    )
+                    is_incomplete = False
             elif is_incomplete and not is_valid_complete_data:
                 # Two very different shapes land here, and only one is a fault.
                 #
@@ -2353,9 +2390,14 @@ class PriceInterface(ForecastMetadataMixin):
                             forecast_type="smart_forecast",
                             source="energyforecast.de",
                         )
-                    # Fallback 2: Try yesterday's prices from history
+                    # Fallback 2: Try yesterday's prices from history.
+                    # Not when the placement's own repetition is sound: a whole
+                    # day repeated is today's curve, while this array still
+                    # holds what the run before midnight filled in, which is
+                    # yesterday's. Today is the better guess for tomorrow.
                     elif (
-                        len(self.last_successful_prices) > 0
+                        not cyclic_fill_is_sound
+                        and len(self.last_successful_prices) > 0
                         and len(self.last_successful_prices) == expected_slots
                     ):
                         logger.info(
@@ -2378,12 +2420,26 @@ class PriceInterface(ForecastMetadataMixin):
                         # last_successful_prices is populated and fallback 2
                         # takes over, which leaves cold start and a
                         # horizon-length mismatch.
-                        logger.warning(
-                            "[PRICE-IF] EVCC incomplete and no fallback available "
-                            "(energyforecast unreachable, no cached prices) - "
-                            "repeating today's prices for the %d remaining slots",
-                            num_missing_slots,
-                        )
+                        #
+                        # Unless a whole day was served: repeating that is this
+                        # shape's own policy, not a last resort, and a run
+                        # where the learning did not hold up is an ordinary
+                        # day. Alerting on it would put a warning on the UI
+                        # every few minutes for the rest of the day.
+                        if cyclic_fill_is_sound:
+                            logger.debug(
+                                "[PRICE-IF] No learned forecast this run - "
+                                "tomorrow keeps today's pattern for the %d "
+                                "remaining slots",
+                                num_missing_slots,
+                            )
+                        else:
+                            logger.warning(
+                                "[PRICE-IF] EVCC incomplete and no fallback available "
+                                "(energyforecast unreachable, no cached prices) - "
+                                "repeating today's prices for the %d remaining slots",
+                                num_missing_slots,
+                            )
                         # fill_price_gaps already repeated today's pattern into
                         # tomorrow's uncovered slots, so `prices` IS the
                         # repetition and is already horizon-length. Rebuilding
