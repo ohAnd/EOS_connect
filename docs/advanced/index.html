@@ -112,6 +112,11 @@
                         <code>ac_charge</code>, <code>dc_charge</code>, <code>discharge_allowed</code>,
                         <code>result</code>.</p>
 
+                    <p>Whatever the backend, <code>ac_charge</code> times <code>battery.max_charge_power_w</code>
+                        is the AC charge energy planned for that slot, in Wh. EOS itself answers with a fraction of
+                        the charge power, which EOS Connect rescales to the slot before the response is stored: on
+                        15-minute slots an EOS value of 1.0 is served as 0.25.</p>
+
                     <p>The one route most integrations need is the control snapshot:</p>
 
                     <pre><code>curl -s http://localhost:8081/json/current_controls.json | jq '.current_states'</code></pre>

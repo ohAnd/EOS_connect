@@ -1212,40 +1212,21 @@ def create_optimize_request():
         }
 
     def get_pv_akku_data():
-        # Use dynamic max charge power if charging curve is enabled, otherwise use fixed value
-        # This ensures EVopt receives realistic charging limits based on current SOC
-        current_dynamic_max = battery_interface.get_max_charge_power()
-        config_fixed_max = config_manager.config["battery"]["max_charge_power_w"]
-        is_dynamic = config_manager.config["battery"].get(
-            "charging_curve_enabled", True
-        )
+        # Every optimizer gets the fixed limit, never the charging curve's current value.
+        # EOS and EVopt take one scalar for all 48 hours, and both use it as the
+        # discharge limit as well: the curve's value at a nearly full battery (0.05 C)
+        # capped the planned discharge at a few hundred watts (#355). The curve still
+        # limits real charging - the control loop caps every setpoint with
+        # get_max_charge_power() - and local_evopt applies it slot by slot in its plan
+        # (see OptimizationInterface.optimize).
+        max_charge_power = config_manager.config["battery"]["max_charge_power_w"]
 
-        if is_dynamic and current_dynamic_max > 0:
-            max_charge_power = current_dynamic_max
-            source_label = "dynamic"
-        elif is_dynamic and current_dynamic_max == 0:
-            # Battery data not yet available (first run or fetch failed); fall back to
-            # configured value so the optimizer gets a meaningful charge limit instead of 0.
-            max_charge_power = config_fixed_max
-            source_label = "dynamic_fallback_to_fixed"
-            logger.warning(
-                "[CHARGE_DEMAND] Dynamic max_charge_power is 0 (battery data not yet "
-                "fetched); using configured fixed value %s W for this optimization run.",
-                config_fixed_max,
-            )
-        else:
-            max_charge_power = config_fixed_max
-            source_label = "fixed"
-
-        # Debug logging for charge demand tracking
         logger.info(
             "[CHARGE_DEMAND] Optimizer request preparation: max_charge_power=%s W "
-            "(source=%s, dynamic_max=%s, config_fixed=%s, charging_curve_enabled=%s)",
+            "(fixed; current charging curve value=%s W, charging_curve_enabled=%s)",
             max_charge_power,
-            source_label,
-            current_dynamic_max,
-            config_fixed_max,
-            is_dynamic,
+            battery_interface.get_max_charge_power(),
+            config_manager.config["battery"].get("charging_curve_enabled", True),
         )
 
         # Store this value in base_control so it can use the same value when
@@ -1718,15 +1699,19 @@ class OptimizationScheduler:
         mqtt_interface.update_publish_topics(
             {"optimization/state": {"value": self.get_current_state()["request_state"]}}
         )
+        # The charging curve at today's battery temperature; None when it is disabled.
+        # Only the built-in optimizer uses it - see get_pv_akku_data for the others.
+        charge_curve = battery_interface.charge_curve_for_planning()
         if managed_records is not None:
             optimized_response, avg_runtime = eos_interface.optimize(
                 json_optimize_input,
                 managed_loads=managed_records,
                 managed_load_budget_w=load_manager.max_power_w,
+                charge_power_limit=charge_curve,
             )
         else:
             optimized_response, avg_runtime = eos_interface.optimize(
-                json_optimize_input
+                json_optimize_input, charge_power_limit=charge_curve
             )
         # Store the runtime for use in sleep calculation (defensive against None)
         try:
@@ -1747,6 +1732,9 @@ class OptimizationScheduler:
                 e,
             )
             self._last_avg_runtime = 120
+        # A schedule only arrives when a run ends, so how long runs take is part of
+        # the gap between two schedules the load manager has to tolerate.
+        load_manager.scheduler_runtime = self._last_avg_runtime
 
         json_optimize_input["timestamp"] = datetime.now(time_zone).isoformat()
         self.last_request_response["request"] = json.dumps(
@@ -2070,6 +2058,9 @@ with BOOT.step("scheduler"):
     # shorter than the optimizer's cadence had the fallback planner publishing into
     # the household forecast on top of a solver that was merely about to run.
     load_manager.scheduler_interval = optimization_scheduler.update_interval
+    # The built-in solver keeps its runs to a share of the same cadence: a plan that
+    # takes longer than the interval arrives stale and leaves loads unscheduled.
+    eos_interface.set_scheduler_interval(optimization_scheduler.update_interval)
 
 
 def change_control_state():

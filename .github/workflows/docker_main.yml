@@ -5,6 +5,10 @@ name: Main - build image and push
 # For pull requests, the Docker image is uploaded as an artifact instead of being pushed to the registry.
 # The repository owner is converted to lowercase for consistent tagging.
 # The workflow uses the GITHUB_TOKEN secret for authentication with GitHub Container Registry.
+# The [AUTO] version commit is pushed with the deploy key in the version-bump environment
+# secret VERSION_BUMP_DEPLOY_KEY: the ruleset on main/develop lets only the maintainer and
+# deploy keys update those branches. That environment is restricted to main and develop, so
+# a workflow on any other branch cannot read the key.
 # Uncomment the Docker Hub section if you want to push to Docker Hub as well.
 # The Docker Hub credentials should be stored in the repository secrets as DOCKER_USERNAME and DOCKER_PASSWORD.
 
@@ -23,9 +27,19 @@ on:
 env:
   VERSION_PREFIX: 0.3.
 
+# Read-only by default; the repository default would hand every job a writable
+# GITHUB_TOKEN. Jobs that publish to GHCR add packages: write for themselves. The
+# [AUTO] version commit does not need contents: write - it is pushed with the
+# deploy key, not with this token.
+permissions:
+  contents: read
+
 jobs:
   tests:
     # This is a gate on a shared branch, so everything runs regardless of the diff.
+    # The [AUTO] commit below carries [skip ci], so it starts no run at all; this guard
+    # is the second line: without it, a bump that did trigger would bump again, forever.
+    if: ${{ !startsWith(github.event.head_commit.message, '[AUTO]') }}
     uses: ./.github/workflows/tests.yml
     with:
       full: true
@@ -33,9 +47,15 @@ jobs:
   publish_image:
     runs-on: ubuntu-24.04
     needs: tests
+    environment: version-bump
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ssh-key: ${{ secrets.VERSION_BUMP_DEPLOY_KEY }}
 
       - name: Pull latest changes
         run: git pull origin main --rebase
@@ -48,11 +68,12 @@ jobs:
 
       - name: Commit version file and push changes
         if: github.event_name == 'push'
-        uses: devops-infra/action-commit-push@master
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          commit_prefix: "[AUTO] "
-          commit_message: "Update version to ${{ env.VERSION }}"
+        run: |
+          git config user.name "ohAnd"
+          git config user.email "ohAnd@users.noreply.github.com"
+          git add src/version.py
+          git commit -m "[AUTO] Update version to $VERSION" -m "[skip ci]"
+          git push origin HEAD:main
 
       - name: Convert repository owner to lowercase
         run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV

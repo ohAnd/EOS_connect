@@ -694,6 +694,66 @@ class BatteryInterface:
             # Shutdown above 60°C - overheat protection
             return 0.0
 
+    def charge_power_limit_w(self, soc, temp=None, min_charge_power=500):
+        """
+        The charging curve: maximum charge power in W at a given SOC and temperature.
+
+        Pure calculation, no state is changed. The live limit
+        (``get_max_charge_power``) and the built-in optimizer's plan both use it, so
+        the two cannot drift apart.
+
+        - Up to 50 % SOC the full configured C-rate applies; above, it falls with
+          ``(1 - (SOC - 50) / 60)**2`` down to a floor of 0.05 C.
+        - The temperature multiplier scales the result (1.0 without a sensor).
+        - Capped at ``max_charge_power_w``, rounded to 50 W, never below
+          ``min_charge_power``.
+
+        Args:
+            soc (float): State of charge in percent, 0..100.
+            temp (float, optional): Battery temperature in °C; None = no sensor.
+            min_charge_power (float): Lower bound in W.
+
+        Returns:
+            float: The charge power limit in W. ``min_charge_power`` if the capacity
+            is not configured or the SOC is out of range.
+        """
+        battery_capacity_wh = self.battery_data.get("capacity_wh", 0)
+        if battery_capacity_wh <= 0 or soc < 0 or soc > 100:
+            return min_charge_power
+
+        max_c_rate = self.max_charge_power_fix / battery_capacity_wh
+        min_c_rate = 0.05
+        if soc <= 50:
+            c_rate_soc = max_c_rate
+        else:
+            c_rate_soc = max(min_c_rate, max_c_rate * (1 - (soc - 50) / 60) ** 2)
+
+        final_c_rate = c_rate_soc * self.__calculate_temp_multiplier(temp)
+
+        max_charge_power = final_c_rate * battery_capacity_wh
+        max_charge_power = min(max_charge_power, self.max_charge_power_fix)
+        max_charge_power = round(max_charge_power / 50) * 50
+        return max(max_charge_power, min_charge_power)
+
+    def charge_curve_for_planning(self):
+        """
+        The charging curve as a function of SOC alone, for the optimizer's plan.
+
+        The temperature is frozen at its current value: it cannot be forecast, and
+        across a 48 h horizon it moves little compared to the SOC.
+
+        Returns:
+            callable or None: ``soc_percent -> W``, or None when the curve is
+            disabled or the capacity is not configured - the plan then uses the
+            fixed ``max_charge_power_w``.
+        """
+        if not self.battery_data.get("charging_curve_enabled", True):
+            return None
+        if self.battery_data.get("capacity_wh", 0) <= 0:
+            return None
+        temp = self.current_temp
+        return lambda soc: self.charge_power_limit_w(min(max(soc, 0), 100), temp)
+
     def __get_max_charge_power_dyn(self, soc=None, temp=None, min_charge_power=500):
         """
         Calculates the maximum charge power dynamically based on SOC and temperature.
@@ -745,9 +805,7 @@ class BatteryInterface:
         if temp is None:
             temp = self.current_temp  # May be None if not configured
 
-        battery_capacity_wh = self.battery_data.get("capacity_wh", 0)
-
-        if battery_capacity_wh <= 0:
+        if self.battery_data.get("capacity_wh", 0) <= 0:
             logger.warning("[BATTERY-IF] Battery capacity not set or invalid.")
             self.max_charge_power_dyn = min_charge_power
             return
@@ -760,27 +818,8 @@ class BatteryInterface:
             self.max_charge_power_dyn = min_charge_power
             return
 
-        # SOC-based C-rate calculation
-        # Max C-rate is based on configured max charge power relative to battery capacity
-        max_c_rate = self.max_charge_power_fix / battery_capacity_wh
-        min_c_rate = 0.05
-
-        if soc <= 50:
-            c_rate_soc = max_c_rate
-        else:
-            c_rate_soc = max(min_c_rate, max_c_rate * (1 - (soc - 50) / 60) ** 2)
-
-        # Temperature compensation
+        max_charge_power = self.charge_power_limit_w(soc, temp, min_charge_power)
         temp_multiplier = self.__calculate_temp_multiplier(temp)
-
-        # Combine factors
-        final_c_rate = c_rate_soc * temp_multiplier
-
-        # Calculate power
-        max_charge_power = final_c_rate * battery_capacity_wh
-        max_charge_power = min(max_charge_power, self.max_charge_power_fix)
-        max_charge_power = round(max_charge_power / 50) * 50
-        max_charge_power = max(max_charge_power, min_charge_power)
 
         # Update and notify if changed
         if max_charge_power != self.last_max_charge_power_dyn:

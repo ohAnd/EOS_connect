@@ -52,6 +52,36 @@ DISCHARGING_STRATEGIES = {
     "discharge_before_import",
     "emergency_reserve",
 }
+
+#: Upper bound on solver runs per optimization when the charging curve is planned.
+#: The first run plans with the curve's limit at the current SOC for the first slot
+#: and the full limit after; each further run lowers a slot's limit to the curve at
+#: the SOC the previous run planned. Measured on 192-slot requests: settled after
+#: 3 to 7 runs, each a fraction of the first run's time.
+CHARGE_CURVE_MAX_RUNS = 8
+
+#: Share of the optimization interval one optimization may spend in the solver, every
+#: run together. CBC finds its plan early and then spends the rest proving it is
+#: optimal: on a 192-slot request with a managed load (#366) the plan after 1-2 s
+#: matched the one after 120 s. A plan arriving after the next slot change is worth
+#: less than a slightly less proven one on time - and above two thirds of the interval
+#: the quarter-aligned scheduler starts skipping runs, which doubles the gap between
+#: schedules.
+SOLVE_BUDGET_SHARE_OF_INTERVAL = 0.25
+
+#: Share of the budget the first run may take when the charging curve is planned, so
+#: a first run that runs into its limit still leaves time to apply the curve.
+FIRST_RUN_BUDGET_SHARE = 0.5
+
+#: A further charging-curve run is not started with less time than this left.
+MIN_RUN_SECONDS = 2.0
+
+#: Floor for the cost baseline, which runs after the plan is settled. It has no managed
+#: loads and solves in well under a second; the floor only keeps a spent budget from
+#: turning it into a zero time limit.
+BASELINE_MIN_SECONDS = 5.0
+
+
 class LocalEVOptBackend(EVOptBackend):
     """
     In-process MILP optimizer backend.
@@ -136,8 +166,35 @@ class LocalEVOptBackend(EVOptBackend):
     # a subclass check so a future backend can opt in without anyone editing the caller.
     schedules_managed_loads = True
 
+    # Plans the battery's charging curve slot by slot; see optimize().
+    plans_charging_curve = True
+
+    # The app's optimization interval in seconds, set by the caller once the scheduler
+    # exists; None or 0 is "unknown". Caps the solve budget - see _solve_budget.
+    scheduler_interval = None
+
+    def _solve_budget(self, timeout):
+        """
+        Seconds one optimization may spend in the solver, all runs together; None is
+        no limit.
+
+        The configured limit - ``local_evopt_time_limit``, else 80 % of the request
+        timeout - capped at a share of the optimization interval. The cap matters
+        because the limit used to apply to every run of the charging-curve loop on its
+        own: with a 500 s timeout three runs took 20 minutes, longer than the interval
+        they were meant to fit into, and managed loads then read as unscheduled.
+        """
+        limit = getattr(self, "time_limit", None)
+        if limit is None and timeout is not None:
+            limit = timeout * 0.8
+        interval = int(getattr(self, "scheduler_interval", None) or 0)
+        if interval > 0:
+            cap = interval * SOLVE_BUDGET_SHARE_OF_INTERVAL
+            limit = cap if limit is None else min(limit, cap)
+        return limit
+
     def optimize(self, eos_request, timeout=180, managed_loads=None,
-                 managed_load_budget_w=0.0):
+                 managed_load_budget_w=0.0, charge_power_limit=None):
         """
         Run the MILP optimizer in-process.
 
@@ -151,6 +208,12 @@ class LocalEVOptBackend(EVOptBackend):
         beside the request rather than inside it: that dict goes over the wire verbatim
         to an EOS server, which validates what it is sent, and nothing outside this
         solver can use them anyway.
+
+        *charge_power_limit* is the battery's charging curve, ``soc_percent -> W``, or
+        None. The MILP cannot evaluate it - the SOC is one of its unknowns - so it is
+        applied around the solver: each run gets a charge limit per slot, lowered to
+        the curve at the SOC the previous run planned for the start of that slot,
+        until the limits stop changing or ``CHARGE_CURVE_MAX_RUNS`` is reached.
         """
         evopt_request, errors = self._transform_request_from_eos_to_evopt(eos_request)
         if errors:
@@ -184,22 +247,31 @@ class LocalEVOptBackend(EVOptBackend):
         try:
             start_time = time.time()
 
+            budget_s = self._solve_budget(timeout)
             loads = self._managed_load_configs(managed_loads)
-            optimizer = self._build_optimizer(
-                evopt_request, timeout, loads,
-                managed_load_budget_w=managed_load_budget_w,
-            )
+            # Worked out here rather than per run: the charging curve may solve
+            # several times, and every run has to be held against the same previous
+            # plan, lined up from the same instant.
             plan_start = self._plan_start()
-            self._attach_previous_plan(optimizer, plan_start)
-            evopt_response = optimizer.solve()
+            optimizer, evopt_response = self._solve_with_charge_curve(
+                evopt_request, eos_request, budget_s, loads,
+                managed_load_budget_w, charge_power_limit, plan_start,
+            )
 
             elapsed = time.time() - start_time
             minutes, seconds = divmod(elapsed, 60)
+            status_text = (
+                "best plan found within the time limit"
+                if evopt_response.get("time_limit_reached")
+                else evopt_response.get("status", "unknown")
+            )
             logger.info(
-                "[OPT-LocalEVopt] Solved in %d min %.2f sec — status: %s (cbc: %s)",
+                "[OPT-LocalEVopt] Solved in %d min %.2f sec (budget %s) — status: %s "
+                "(cbc: %s)",
                 int(minutes),
                 seconds,
-                evopt_response.get("status", "unknown"),
+                f"{budget_s:.0f} s" if budget_s is not None else "none",
+                status_text,
                 self.cbc_path or "unresolved",
             )
 
@@ -230,7 +302,8 @@ class LocalEVOptBackend(EVOptBackend):
             )
             eos_response["managed_loads"] = self._managed_load_schedules(evopt_response)
             eos_response["managed_loads_cost"] = self._managed_load_cost(
-                optimizer, evopt_request, evopt_response, timeout
+                optimizer, evopt_request, evopt_response,
+                None if budget_s is None else budget_s - (time.time() - start_time),
             )
             return eos_response, avg_runtime
 
@@ -281,9 +354,140 @@ class LocalEVOptBackend(EVOptBackend):
         if optimizer.plan_stability_weight > 0:
             optimizer.previous_plan = self.plan_memory.previous(plan_start, optimizer.T)
 
-    def _build_optimizer(self, evopt_request, timeout, managed_loads=None,
-                         managed_load_budget_w=0.0):
-        """Construct the Optimizer object from an EVopt-format request dict."""
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    def _solve_with_charge_curve(self, evopt_request, eos_request, budget_s, loads,
+                                 managed_load_budget_w, charge_power_limit,
+                                 plan_start=None):
+        """
+        Solve once, or - with a charging curve - until the per-slot limits settle.
+
+        Returns ``(optimizer, evopt_response)`` of the run whose plan is used. A
+        later run that does not solve hands back the previous one, so planning the
+        curve can never turn a usable plan into none.
+
+        *plan_start* is the instant this plan's slot 0 begins, which lines every run
+        up with the previous plan - see `plan_stability`. None leaves this solve out
+        of that chain entirely.
+
+        *budget_s* is the solver time for every run together (None: no limit). The
+        first run of the curve gets half of it, each further run what is left, and no
+        further run starts once less than ``MIN_RUN_SECONDS`` remain - the plan of the
+        last run is then the one used, as when a run fails.
+        """
+        started = time.monotonic()
+
+        def remaining():
+            if budget_s is None:
+                return None
+            return budget_s - (time.monotonic() - started)
+
+        def build_and_solve(c_max_series, time_limit_s):
+            optimizer = self._build_optimizer(
+                evopt_request, time_limit_s, loads,
+                managed_load_budget_w=managed_load_budget_w,
+                c_max_series=c_max_series,
+            )
+            # Every run of the curve, not just the first: a run that is not held
+            # against the previous plan is free to flip, and it is one of these runs
+            # whose plan goes out.
+            if plan_start is not None:
+                self._attach_previous_plan(optimizer, plan_start)
+            return optimizer, optimizer.solve()
+
+        if charge_power_limit is None:
+            return build_and_solve(None, budget_s)
+
+        pv_akku = eos_request.get("pv_akku") or {}
+        capacity_wh = float(pv_akku.get("capacity_wh", 0) or 0)
+        initial_soc = float(pv_akku.get("initial_soc_percentage", 0) or 0)
+        n_slots = len(evopt_request.get("time_series", {}).get("dt") or [])
+        if capacity_wh <= 0 or n_slots == 0:
+            return build_and_solve(None, budget_s)
+
+        # Run 1: the curve's limit at the current SOC for the first slot - the same
+        # value the control loop applies right now - and below the curve's knee after.
+        caps = [charge_power_limit(initial_soc)] + [charge_power_limit(0.0)] * (n_slots - 1)
+        result = build_and_solve(
+            caps, None if budget_s is None else budget_s * FIRST_RUN_BUDGET_SHARE
+        )
+        for run in range(2, CHARGE_CURVE_MAX_RUNS + 1):
+            if not self._is_solved(result[1]):
+                break
+            left = remaining()
+            if left is not None and left < MIN_RUN_SECONDS:
+                logger.info(
+                    "[OPT-LocalEVopt] Charging curve: solve budget of %.0f s spent "
+                    "after run %d; using its plan",
+                    budget_s,
+                    run - 1,
+                )
+                return result
+            # A limit only ever comes down. Replaced outright, the limits do not
+            # settle: the plan has many equally cheap ways to place its charging, the
+            # solver picks a different one each run, the SOC moves and so do the
+            # limits. Lowered only, they reach a plan that keeps to the curve in
+            # every slot - at the same cost on the requests this was measured on.
+            from_plan = self._charge_caps_from_plan(
+                result[1], capacity_wh, initial_soc, n_slots, charge_power_limit
+            )
+            next_caps = [min(a, b) for a, b in zip(caps, from_plan)]
+            changed = [i for i, (a, b) in enumerate(zip(caps, next_caps)) if a != b]
+            if not changed:
+                logger.info(
+                    "[OPT-LocalEVopt] Charging curve: limits stable after run %d",
+                    run - 1,
+                )
+                return result
+            logger.info(
+                "[OPT-LocalEVopt] Charging curve: run %d with %d slot limit(s) changed "
+                "(largest change %.0f W)",
+                run,
+                len(changed),
+                max(abs(caps[i] - next_caps[i]) for i in changed),
+            )
+            caps = next_caps
+            candidate = build_and_solve(caps, left)
+            if not self._is_solved(candidate[1]):
+                logger.warning(
+                    "[OPT-LocalEVopt] Charging curve: run %d did not solve (%s); "
+                    "keeping the plan of run %d",
+                    run,
+                    candidate[1].get("status", "unknown"),
+                    run - 1,
+                )
+                return result
+            result = candidate
+        return result
+
+    @staticmethod
+    def _is_solved(evopt_response):
+        status = evopt_response.get("status", "")
+        status_lower = status.lower() if isinstance(status, str) else ""
+        return status_lower not in ("infeasible", "unbounded", "undefined", "not solved")
+
+    @staticmethod
+    def _charge_caps_from_plan(evopt_response, capacity_wh, initial_soc, n_slots,
+                               charge_power_limit):
+        """
+        Per-slot charge limits from the curve at the SOC planned for each slot start.
+
+        ``state_of_charge[t]`` is the SOC at the *end* of slot t, so slot t starts at
+        ``state_of_charge[t-1]``; slot 0 starts at the current SOC.
+        """
+        batteries = evopt_response.get("batteries") or []
+        planned = (batteries[0].get("state_of_charge") if batteries else None) or []
+        starts = [initial_soc] + [s / capacity_wh * 100.0 for s in planned[: n_slots - 1]]
+        starts += [starts[-1]] * (n_slots - len(starts))
+        return [charge_power_limit(soc) for soc in starts]
+
+    def _build_optimizer(self, evopt_request, time_limit_s, managed_loads=None,
+                         managed_load_budget_w=0.0, c_max_series=None):
+        """
+        Construct the Optimizer object from an EVopt-format request dict.
+
+        *time_limit_s* is this solve's CBC time limit, already taken from the
+        optimization's budget (see _solve_budget); None is no limit.
+        """
         # Use configured strategies (may override what the transformation put in)
         strategy = OptimizationStrategy(
             charging_strategy=self.charging_strategy,
@@ -339,6 +543,7 @@ class LocalEVOptBackend(EVOptBackend):
                 p_a=float(bat_data.get("p_a", 0)),
                 c_priority=int(bat_data.get("c_priority", 0)),
                 s_reserve=s_reserve_wh,
+                c_max_series=c_max_series,
             ))
 
         ts_data = evopt_request.get("time_series", {})
@@ -350,16 +555,10 @@ class LocalEVOptBackend(EVOptBackend):
             p_E=ts_data.get("p_E", []),
         )
 
-        # Solver settings
-        # timeout parameter is the EOS timeout; use as an upper bound for the solver
-        solver_time_limit = self.time_limit
-        if solver_time_limit is None and timeout is not None:
-            # Leave 20% headroom vs overall EOS timeout
-            solver_time_limit = timeout * 0.8
-
+        # CBC takes no limit below a second; a budget nearly spent still gets one.
         settings = OptimizerSettings(
-            num_threads=self.num_threads,
-            time_limit=solver_time_limit,
+            num_threads=getattr(self, "num_threads", None),
+            time_limit=None if time_limit_s is None else max(1.0, float(time_limit_s)),
         )
 
         # Compute a tight Big-M from actual problem data.
@@ -515,7 +714,8 @@ class LocalEVOptBackend(EVOptBackend):
             return None
         return self.to_solver_slots(values, fill=1.0)
 
-    def _managed_load_cost(self, optimizer, evopt_request, evopt_response, timeout):
+    def _managed_load_cost(self, optimizer, evopt_request, evopt_response,
+                           remaining_s):
         """
         What the household actually pays extra for the loads, per Wh.
 
@@ -540,7 +740,13 @@ class LocalEVOptBackend(EVOptBackend):
             return None
 
         try:
-            baseline = self._build_optimizer(evopt_request, timeout, None)
+            # What is left of the optimization's budget, with a floor: the plan is
+            # already settled, and this battery-only solve is fast.
+            baseline = self._build_optimizer(
+                evopt_request,
+                None if remaining_s is None else max(BASELINE_MIN_SECONDS, remaining_s),
+                None,
+            )
             baseline_response = baseline.solve()
         except Exception:  # pylint: disable=broad-except
             logger.exception("[OPT-LocalEVopt] baseline solve failed - reporting no cost")

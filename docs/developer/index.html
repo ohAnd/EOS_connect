@@ -309,6 +309,22 @@ battery_interface = factory.create_battery_interface(
                         <li><code>evopt</code> &mdash; an external EVopt instance.</li>
                         <li><code>eos_server</code> &mdash; an external Akkudoktor EOS server.</li>
                     </ul>
+                    <p>The response contract fixes one unit the backends disagree on: <code>ac_charge</code> times
+                        <code>max_charge_power_w</code> is the slot's AC charge energy in Wh, as the EVopt backends
+                        answer. EOS answers with a fraction of the charge power, so
+                        <code>EOSGeneticPath._normalize</code> scales it by <code>time_frame_base / 3600</code>. The
+                        chart and the control loop (<code>BaseControl.set_current_ac_charge_demand</code>) both read
+                        the energy.</p>
+                    <p>The battery's charging curve reaches only <code>local_evopt</code>. The request carries
+                        the fixed <code>max_charge_power_w</code> for every backend, because EOS and EVopt take one
+                        limit for the whole horizon and also use it to cap discharging. The MILP cannot evaluate
+                        the curve either &mdash; the SOC is one of its unknowns &mdash; so
+                        <code>LocalEVOptBackend</code> applies it around the solver: each run gets a charge limit
+                        per slot (<code>BatteryConfig.c_max_series</code>), lowered to the curve at the SOC the
+                        previous run planned for the start of that slot, until no limit changes or
+                        <code>CHARGE_CURVE_MAX_RUNS</code> is reached. Limits only come down; replaced outright
+                        they never settle, because the plan has many equally cheap ways to place its
+                        charging.</p>
                     <p>Inverter support works the same way: <code>inverters/inverter_factory.py</code> maps
                         <code>inverter.type</code> onto a class, and every class implements the abstract
                         contract in <code>src/interfaces/base_inverter.py</code>. Adding hardware means adding a
@@ -740,6 +756,13 @@ scripts/install_playwright_deps_userspace.sh      # the alternative, without roo
                         and run everything regardless &mdash; those are the gates, and they are never
                         narrowed. A sixth workflow, <code>docker-image.yml</code>, is manual-dispatch
                         only.</p>
+                    <p>Every workflow declares its <code>GITHUB_TOKEN</code> permissions in a top-level
+                        <code>permissions:</code> block, because the repository default is write access. The
+                        default there is <code>contents: read</code>; only the jobs that publish to GHCR add
+                        <code>packages: write</code>, and <code>docker-image.yml</code> takes
+                        <code>contents: write</code> to create its release.
+                        <code>test_every_workflow_pins_its_token_permissions</code> fails on a workflow
+                        without the block.</p>
                 </div>
 
                 <div class="content-section">
@@ -872,9 +895,8 @@ scripts/install_playwright_deps_userspace.sh      # the alternative, without roo
                     <div class="alert alert-info">
                         <p><strong>Why the publish runs twice.</strong> The build number reaches
                             <code>src/version.py</code> only <em>after</em> the push that started the build,
-                            in the <code>[AUTO]</code> commit the image workflows push with
-                            <code>GITHUB_TOKEN</code> &mdash; and GitHub starts no workflow run from an event
-                            that token created. So the run that the docs push started reads the previous
+                            in the <code>[AUTO]</code> commit the image workflows push &mdash; and that commit
+                            carries <code>[skip ci]</code>, so GitHub starts no workflow run for it. So the run that the docs push started reads the previous
                             build number. <code>pages.yml</code> therefore also listens on
                             <code>workflow_run</code> for those two workflows finishing, and publishes again
                             with the version current. That trigger only fires for the copy of the file on the
@@ -953,6 +975,11 @@ docs: update MQTT topic table</code></pre>
                     </div>
                     <p>Do not edit <code>src/version.py</code>. Versions are bumped by automation and land as
                         <code>[AUTO] Update version to ...</code> commits.</p>
+                    <p>Only the maintainer merges into <code>main</code> and <code>develop</code>. A ruleset
+                        restricts updates to both branches, so collaborators with write access push their own
+                        branches and open pull requests, but cannot push or merge there. The version bump gets
+                        through with a deploy key that only workflows on <code>main</code> and
+                        <code>develop</code> can read.</p>
 
                     <h3 id="pr-checklist">What a pull request needs</h3>
                     <ul>

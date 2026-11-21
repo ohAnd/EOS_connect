@@ -847,7 +847,11 @@ _ALL_FIELDS: list[FieldDef] = [
         default=180,
         section="eos",
         level="standard",
-        description="Timeout for optimization requests in seconds",
+        description=(
+            "Timeout for optimization requests in seconds. The built-in optimizer "
+            "spends at most 80 % of it solving, and never more than a quarter of "
+            "the optimization interval"
+        ),
         labels=[],
         help_url="config-optimizer.html#eos",
         validation={"min": 10, "max": 600},
@@ -1048,7 +1052,11 @@ _ALL_FIELDS: list[FieldDef] = [
         default=0,
         section="eos",
         level="expert",
-        description="CBC solver time limit in seconds for built-in optimizer (0 = no limit)",
+        description=(
+            "CBC solver time limit in seconds for built-in optimizer, all solver runs "
+            "of one optimization together (0 = 80 % of the timeout). Never more than "
+            "a quarter of the optimization interval"
+        ),
         help_url="config-optimizer.html#eos",
         validation={"min": 0, "max": 600},
         depends_on={"eos.source": "local_evopt"},
@@ -1519,7 +1527,11 @@ _ALL_FIELDS: list[FieldDef] = [
         default=True,
         section="battery",
         level="standard",
-        description="Enable charging curve for controlled charging power according to SOC",
+        description=(
+            "Reduce the charge power as the battery fills, by SOC and battery "
+            "temperature. Always limits real charging; the built-in optimizer "
+            "(local_evopt) also plans with it. Never limits discharging"
+        ),
         labels=["restart_required"],
         help_url="config-battery.html#battery",
         display_group="Charging",
@@ -1656,7 +1668,11 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="battery",
         level="standard",
-        description="Sensor for load power in W. EVCC supplies its household history",
+        description=(
+            "Sensor for total household load in W, wallbox and managed loads "
+            "included — the same balance point PV and grid are measured at. "
+            "EVCC supplies its household history"
+        ),
         labels=["restart_required", "evcc_managed"],
         help_url="config-battery.html#battery-price",
         depends_on={"battery.price_calculation_enabled": [True]},
@@ -1668,7 +1684,10 @@ _ALL_FIELDS: list[FieldDef] = [
         default="",
         section="battery",
         level="standard",
-        description="Sensor for electricity price. EVCC supplies its persisted tariff slots",
+        description=(
+            "Sensor for the current grid import price, not a forecast. EVCC "
+            "supplies its persisted tariff slots"
+        ),
         labels=["restart_required", "evcc_managed"],
         help_url="config-battery.html#battery-price",
         depends_on={"battery.price_calculation_enabled": [True]},

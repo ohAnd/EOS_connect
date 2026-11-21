@@ -204,8 +204,29 @@ class OptimizationInterface:
         """
         return bool(getattr(self.backend, "places_home_appliance", False))
 
+    @property
+    def plans_charging_curve(self):
+        """
+        Whether the backend plans with the battery's charging curve slot by slot.
+
+        Only the in-process solver can: EOS and EVopt take one charge limit for the
+        whole horizon, so they are sent the fixed maximum instead.
+        """
+        return bool(getattr(self.backend, "plans_charging_curve", False))
+
+    def set_scheduler_interval(self, seconds):
+        """
+        Tell the backend how often it is run.
+
+        Only the in-process solver uses it: it caps its solve time at a share of the
+        interval, so a plan arrives before the next run is due. The external backends
+        are bounded by the request timeout alone.
+        """
+        if hasattr(self.backend, "scheduler_interval"):
+            self.backend.scheduler_interval = seconds
+
     def optimize(self, eos_request, timeout=None, managed_loads=None,
-                 managed_load_budget_w=0.0):
+                 managed_load_budget_w=0.0, charge_power_limit=None):
         """
         Main entry point for optimization.
         Accepts EOS-format request, returns EOS-format response.
@@ -216,17 +237,21 @@ class OptimizationInterface:
         inside it because that dict is posted verbatim to an EOS server, which
         validates what it is sent. *managed_load_budget_w* travels the same way: it
         belongs to the installation rather than to any one load.
+
+        *charge_power_limit* is the charging curve (``soc_percent -> W``) and reaches
+        only a backend that plans with it; the others get the fixed limit inside the
+        request.
         """
         if timeout is None:
             timeout = self.timeout
         self.last_eos_request = eos_request  # Store for dynamic override logic
+        extra = {}
         if managed_loads is not None and self.schedules_managed_loads:
-            eos_response, avg_runtime = self.backend.optimize(
-                eos_request, timeout, managed_loads=managed_loads,
-                managed_load_budget_w=managed_load_budget_w,
-            )
-        else:
-            eos_response, avg_runtime = self.backend.optimize(eos_request, timeout)
+            extra["managed_loads"] = managed_loads
+            extra["managed_load_budget_w"] = managed_load_budget_w
+        if charge_power_limit is not None and self.plans_charging_curve:
+            extra["charge_power_limit"] = charge_power_limit
+        eos_response, avg_runtime = self.backend.optimize(eos_request, timeout, **extra)
         return eos_response, avg_runtime
 
     def examine_response_to_control_data(self, optimized_response_in):

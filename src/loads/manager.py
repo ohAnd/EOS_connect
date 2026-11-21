@@ -216,6 +216,10 @@ class ManagedLoadManager:
         # measured *against* how often a schedule is actually expected - see
         # _schedule_max_age - and the manager cannot know it without being told.
         self.scheduler_interval = scheduler_interval
+        # The optimizer's average run time, in seconds, refreshed after every run. A
+        # schedule arrives at the *end* of a run, so a slow solver widens the gap
+        # between schedules by its own duration.
+        self.scheduler_runtime = None
         # Injectable so tests can pin "now". Every planning decision depends on which
         # slot the current moment falls in, so a suite that reads the wall clock passes
         # in the morning and fails after lunch.
@@ -539,10 +543,15 @@ class ManagedLoadManager:
         cycle, right for a small fast app and too eager beside a slow one. An
         interval of zero or less is "unknown": the old cycle-based age stands, which
         leaves a fast external solver as it was and never makes anything worse.
+
+        The solver's own run time comes on top: the schedule lands when a run ends,
+        and a run that takes minutes moves that end by minutes. Ignoring it fired
+        this warning between every pair of runs of a 20-minute solve (#366).
         """
         interval = int(self.scheduler_interval or 0)
         if interval > 0:
-            return interval * 2 + SCHEDULER_GRACE_SECONDS
+            runtime = max(0, int(self.scheduler_runtime or 0))
+            return interval * 2 + runtime + SCHEDULER_GRACE_SECONDS
         return max(120, self.cycle_seconds * 2)
 
     def schedulable(self):

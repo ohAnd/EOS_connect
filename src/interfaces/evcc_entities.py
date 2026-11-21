@@ -140,10 +140,28 @@ def evcc_history_params(entity, start, end, aggregate="15m"):
     return params
 
 
-# A resolved connection to one data source. The four things every reader needs
-# and nothing more: which protocol answers, where, with what credential, and
-# whether a self-signed certificate is acceptable.
-Connection = namedtuple("Connection", "src url access_token ssl_ignore")
+class Connection(namedtuple("Connection", "src url access_token ssl_ignore")):
+    """A resolved connection to one data source.
+
+    The four things every reader needs and nothing more: which protocol
+    answers, where, with what credential, and whether a self-signed certificate
+    is acceptable.
+
+    Trailing slashes are trimmed here rather than at each endpoint. A configured
+    ``http://host/`` used to be joined into ``http://host//api/history/period/...``,
+    and a doubled slash is a path Home Assistant does not route - so every
+    history fetch came back 404 while the config UI's Test button, which reads
+    through ``state_source`` and trims, reported the very same entity as
+    working. Normalizing where the connection is built means a new endpoint
+    cannot reintroduce that by forgetting.
+    """
+
+    __slots__ = ()
+
+    def __new__(cls, src, url, access_token="", ssl_ignore=False):
+        return super().__new__(
+            cls, src, str(url or "").strip().rstrip("/"), access_token, ssl_ignore
+        )
 
 
 def evcc_serves_live(name) -> bool:

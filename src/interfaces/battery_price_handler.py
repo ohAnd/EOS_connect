@@ -493,16 +493,28 @@ class BatteryPriceHandler:
         return time_since_last >= self.price_update_interval
 
     def update_price_if_needed(self, inventory_wh: Optional[float] = None) -> bool:
-        """Update price if the update interval has passed."""
+        """Update price if the update interval has passed.
+
+        The attempt is stamped, not the success. Stamping only a successful
+        analysis left the previous stamp in place when one failed, so it went
+        stale and stayed stale: ``should_update_price`` answered yes on every
+        call from then on, and the full lookback ran on every pass of the
+        battery update loop - once every 30 seconds instead of once every 15
+        minutes, five sensors at a time. One site logged 1911 failed history
+        requests in about three hours that way, which is also how the data
+        source that caused them became impossible to find in the log.
+        ``perform_initial_price_calculation`` already stamps up front, for this
+        same reason.
+        """
         if not self.should_update_price():
             return False
 
+        self.last_price_calculation = (
+            datetime.now(self.timezone) if self.timezone else datetime.now()
+        )
         new_price = self.calculate_battery_price_from_history(inventory_wh=inventory_wh)
         if new_price is not None:
             self.price_euro_per_wh = new_price
-            self.last_price_calculation = (
-                datetime.now(self.timezone) if self.timezone else datetime.now()
-            )
             return True
 
         return False

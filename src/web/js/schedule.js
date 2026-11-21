@@ -17,75 +17,60 @@ class ScheduleManager {
     }
 
     /**
-     * Converts 15-min interval data to hourly averages based on the base timestamp.
-     * @param {Array<number>} dataArray - Array of 15-min interval values.
-     * @param {string|Date} baseTimestamp - Timestamp of the first value (ISO string or Date).
-     * @returns {Array<number>} Array of hourly averages.
+     * Folds 15-min slots into hours, aggregating each hour with `reduceHour`.
+     *
+     * Two layouts arrive here. The control arrays (`ac_charge`,
+     * `discharge_allowed`, `dc_charge`) start at local midnight: pass
+     * `full = true` and every four slots from index 0 are one clock hour, so
+     * hour h is slots 4h..4h+3. The `result` arrays start at the current slot:
+     * with `full = false` the first hour takes only the quarters left in the
+     * hour of `baseTimestamp`, and full hours follow.
+     *
+     * @param {Array<number>} dataArray - 15-min slot values.
+     * @param {string|Date} baseTimestamp - when the first slot of a `result` array starts.
+     * @param {boolean} full - true for an array anchored at midnight.
+     * @param {function(Array<number>): number} reduceHour - aggregates one hour's slots.
+     * @returns {Array<number>} one value per hour.
      */
-    convertQuarterlyToHourly(dataArray, baseTimestamp, full = false) {
-        var baseTime = new Date(baseTimestamp);
-        var baseMinute = baseTime.getMinutes();
-        // How many quarters left in the current hour (including the current one)
-        var quartersLeft = Math.ceil((60 - baseMinute) / 15);
-
-        var hourlyData = [];
+    foldQuartersToHours(dataArray, baseTimestamp, full, reduceHour) {
         var i = 0;
-        if (full) {
-            // Always start grouping from midnight, every 4 slots = 1 hour
-            for (; i < dataArray.length; i += 4) {
-                var chunk = dataArray.slice(i, i + 4);
-                if (chunk.length > 0) {
-                    var avg = chunk.reduce((a, b) => a + b, 0) / chunk.length;
-                    hourlyData.push(avg);
-                }
-            }
-        } else {
-            // First hour: average over the remaining quarters in the current hour
+        var hourlyData = [];
+        if (!full) {
+            var baseMinute = new Date(baseTimestamp).getMinutes();
+            // How many quarters left in the current hour (including the current one)
+            var quartersLeft = Math.ceil((60 - baseMinute) / 15);
             if (quartersLeft > 0 && dataArray.length >= quartersLeft) {
-                var avg = dataArray.slice(0, quartersLeft).reduce((a, b) => a + b, 0) / quartersLeft;
-                hourlyData.push(avg);
+                hourlyData.push(reduceHour(dataArray.slice(0, quartersLeft)));
                 i = quartersLeft;
             }
-            // Process remaining full hours
-            for (; i < dataArray.length; i += 4) {
-                var chunk = dataArray.slice(i, i + 4);
-                if (chunk.length > 0) {
-                    var avg = chunk.reduce((a, b) => a + b, 0) / chunk.length;
-                    hourlyData.push(avg);
-                }
+        }
+        for (; i < dataArray.length; i += 4) {
+            var chunk = dataArray.slice(i, i + 4);
+            if (chunk.length > 0) {
+                hourlyData.push(reduceHour(chunk));
             }
         }
         return hourlyData;
     }
 
     /**
-     * Converts 15-min interval data to hourly sums based on the base timestamp.
-     * @param {Array<number>} dataArray - Array of 15-min interval values.
-     * @param {string|Date} baseTimestamp - Timestamp of the first value (ISO string or Date).
+     * Converts 15-min interval data to hourly averages.
+     * See foldQuartersToHours for `baseTimestamp` and `full`.
+     * @returns {Array<number>} Array of hourly averages.
+     */
+    convertQuarterlyToHourly(dataArray, baseTimestamp, full = false) {
+        return this.foldQuartersToHours(dataArray, baseTimestamp, full,
+            chunk => chunk.reduce((a, b) => a + b, 0) / chunk.length);
+    }
+
+    /**
+     * Converts 15-min interval data to hourly sums.
+     * See foldQuartersToHours for `baseTimestamp` and `full`.
      * @returns {Array<number>} Array of hourly sums.
      */
-    convertQuarterlyToHourlySum(dataArray, baseTimestamp) {
-        var baseTime = new Date(baseTimestamp);
-        var baseMinute = baseTime.getMinutes();
-        var quartersLeft = Math.ceil((60 - baseMinute) / 15);
-
-        var hourlyData = [];
-        var i = 0;
-        // First hour: sum over the remaining quarters in the current hour
-        if (quartersLeft > 0 && dataArray.length >= quartersLeft) {
-            var sum = dataArray.slice(0, quartersLeft).reduce((a, b) => a + b, 0);
-            hourlyData.push(sum);
-            i = quartersLeft;
-        }
-        // Process remaining full hours
-        for (; i < dataArray.length; i += 4) {
-            var chunk = dataArray.slice(i, i + 4);
-            if (chunk.length > 0) {
-                var sum = chunk.reduce((a, b) => a + b, 0);
-                hourlyData.push(sum);
-            }
-        }
-        return hourlyData;
+    convertQuarterlyToHourlySum(dataArray, baseTimestamp, full = false) {
+        return this.foldQuartersToHours(dataArray, baseTimestamp, full,
+            chunk => chunk.reduce((a, b) => a + b, 0));
     }
 
     /**
@@ -137,7 +122,8 @@ class ScheduleManager {
                 data_response["result"]["Einnahmen_Euro_pro_Stunde"],
                 data_response["timestamp"]
             );
-            // Transform ac_charge to hourly sums
+            // The control arrays start at midnight, unlike the result arrays
+            // above: fold them by clock hour, then index with currentHour.
             ac_charge = this.convertQuarterlyToHourlySum(
                 ac_charge,
                 data_response["timestamp"],
@@ -147,12 +133,14 @@ class ScheduleManager {
             // Transform discharge_allowed to hourly values (avg then round)
             discharge_allowed = this.convertQuarterlyToHourly(
                 discharge_allowed,
-                data_response["timestamp"]
+                data_response["timestamp"],
+                true
             ).map(val => val > 0 ? 1 : 0);
             // Transform dc_charge to hourly values (avg then round)
             dc_charge = this.convertQuarterlyToHourly(
                 dc_charge,
-                data_response["timestamp"]
+                data_response["timestamp"],
+                true
             ).map(val => val > 0 ? 1 : 0);
         }
 

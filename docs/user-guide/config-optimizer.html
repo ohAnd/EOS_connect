@@ -140,9 +140,16 @@
                             <code>eos.local_evopt_max_grid_import_w</code> and
                             <code>eos.local_evopt_max_grid_export_w</code>. Both default to
                             <code>0</code>, meaning "use the inverter's own limit".
-                            <code>eos.local_evopt_num_threads</code> and
-                            <code>eos.local_evopt_time_limit</code> bound the CBC solver on slow hardware;
-                            <code>0</code> means no limit.</p>
+                            <code>eos.local_evopt_num_threads</code> sets how many threads the CBC
+                            solver uses; <code>0</code> means automatic.</p>
+                        <p>The solver's time is one budget per optimization, shared by every run of
+                            the charging-curve loop and the cost comparison for managed loads:
+                            <code>eos.local_evopt_time_limit</code> if set, otherwise 80&nbsp;% of
+                            <code>eos.timeout</code>, and never more than a quarter of the optimization
+                            interval (<code>refresh_time</code>). CBC usually finds its plan within
+                            seconds and spends the rest proving it optimal, so a plan cut off by the
+                            budget is the one it would have kept. The log says so when that happens:
+                            <em>best plan found within the time limit</em>.</p>
                         <div class="alert alert-warning">
                             <p>The external-EVopt equivalents,
                                 <code>eos.external_evopt_max_grid_import_w</code> and
@@ -205,6 +212,15 @@
                         tariff slots are quarter-hourly &mdash; so <code>900</code> plans on
                         what it actually measured. What that costs is the size of the problem
                         the optimizer solves: 192 slots across the horizon instead of 48.</p>
+                    <p>Solar is energy too, and how much shape survives depends on the
+                        provider. <code>openmeteo</code> plans on the quarter-hourly energy
+                        Open-Meteo publishes, so at <code>900</code> the sunrise and sunset
+                        ramps and a passing cloud each land in their own slot;
+                        <a href="config-solar.html#pv-forecast-sources">Forecast.Solar</a>
+                        buckets at its own resolution. The providers that answer hourly
+                        &mdash; <code>openmeteo_local</code> and Akkudoktor &mdash; have one
+                        value per hour to give, so each quarter gets a quarter of it: the
+                        day's total is right, the shape inside the hour is flat.</p>
                     <div class="alert alert-info">
                         <p><strong>With the Akkudoktor EOS server, quarter-hourly needs a recent
                             build.</strong> EOS has two optimization endpoints. The older
@@ -223,6 +239,12 @@
                             path to the servers that have nothing else. Nothing about this is
                             configurable and nothing about it is visible in the plan &mdash; the
                             log line at startup names the endpoint in use.</p>
+                        <p>Behind <code>/v1/optimize</code>, EOS reads battery, inverter and car from
+                            its own device configuration, and EOS Connect writes them there. Recent
+                            builds describe these devices by profile; EOS Connect asks the server
+                            for that as well and writes capacity and power limits as profile
+                            adjustments &mdash; see <a href="config-battery.html#battery">The
+                            battery itself</a> for what the profile takes over.</p>
                     </div>
 
                     <div data-schema-section="eos" data-schema-anchor="time-slot-config"></div>
