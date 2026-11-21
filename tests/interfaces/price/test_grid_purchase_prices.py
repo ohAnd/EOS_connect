@@ -825,16 +825,34 @@ class TestOneBrokenTimestampInThePrediction:
 
 
 def test_tibber_energyforecast_fallback_enabled(monkeypatch):
-    """Test Tibber with energyforecast smart price prediction (tomorrow missing)."""
-    # Simulate Tibber response with only today (no tomorrow)
+    """Tibber has a short day; energyforecast fills the rest from what it learned.
+
+    The data hides the relationship ``total = 1.19 * epex + 0.26``, so the test
+    can say what the prediction has to come out as instead of only counting
+    values. Eight known hours is just over the six-hour minimum the learning
+    asks for.
+
+    Both sides are spelled the way the services spell them: Tibber's
+    ``startsAt`` and energyforecast's ``start`` are local time with an offset
+    and milliseconds.
+    """
+    factor, offset = 1.19, 0.26
+    midnight = datetime(2025, 10, 20, 0, tzinfo=timezone.utc)
+
+    def epex(hour):
+        """EUR/kWh, a curve with a slope for the regression to find."""
+        return 0.06 + 0.012 * ((hour * 5) % 9)
+
     today = [
         {
-            "total": 250 + i * 10,  # 25.0, 26.0, 27.0, 28.0 ct/kWh
+            "total": factor * epex(hour) + offset,
             "energy": 0.1,
-            "startsAt": f"2025-10-20T{i:02d}:00:00.000Z",
+            "startsAt": (midnight + timedelta(hours=hour)).isoformat(
+                timespec="milliseconds"
+            ),
             "currency": "EUR",
         }
-        for i in range(4)
+        for hour in range(8)
     ]
     tibber_response = {
         "data": {
@@ -850,17 +868,22 @@ def test_tibber_energyforecast_fallback_enabled(monkeypatch):
         }
     }
 
-    # Simulate energyforecast response (EPEX spot prices)
-    energyforecast_data = {
-        "data": [
-            {
-                "start": f"2025-10-20T{i:02d}:00:00.000Z",
-                "end": f"2025-10-20T{i+1:02d}:00:00.000Z",
-                "price_ct_per_kwh": 10.0 + i,
-            }
-            for i in range(8)  # 0-7 hours
-        ]
-    }
+    # A plain list of entries with a "price" in EUR/kWh - the shape the API
+    # answers with. A dict, or a differently named price, is discarded before
+    # the learning ever runs.
+    energyforecast_data = [
+        {
+            "start": (midnight + timedelta(hours=hour)).isoformat(
+                timespec="milliseconds"
+            ),
+            "end": (midnight + timedelta(hours=hour + 1)).isoformat(
+                timespec="milliseconds"
+            ),
+            "price": epex(hour),
+            "price_origin": "market",
+        }
+        for hour in range(48)
+    ]
 
     def fake_post(url, headers=None, json=None, timeout=None):
         """Mock both Tibber and energyforecast API calls."""
@@ -872,9 +895,7 @@ def test_tibber_energyforecast_fallback_enabled(monkeypatch):
             def json(self):
                 if "tibber" in url:
                     return tibber_response
-                elif "energyforecast" in url:
-                    return energyforecast_data
-                return {}
+                return energyforecast_data
 
         return R()
 
@@ -898,16 +919,19 @@ def test_tibber_energyforecast_fallback_enabled(monkeypatch):
         time_frame_base=3600,
         timezone=timezone.utc,
     )
-    price_interface.update_prices(
-        8, start_time=datetime(2025, 10, 20, 0, tzinfo=timezone.utc)
-    )
+    price_interface.update_prices(24, start_time=midnight)
 
     prices = price_interface.get_current_prices()
-    # First 4 hours should be Tibber prices
-    assert prices[0] == pytest.approx(0.250, rel=1e-9)  # 25.0 ct/kWh
-    assert prices[1] == pytest.approx(0.260, rel=1e-9)  # 26.0 ct/kWh
-    # Hours 4-7 should be populated by energyforecast prediction (not simple repetition)
-    assert len(prices) == 8
+    assert len(prices) == 24
+    # The eight hours Tibber sent, unchanged.
+    assert prices[0] == pytest.approx((factor * epex(0) + offset) / 1000, rel=1e-9)
+    assert prices[7] == pytest.approx((factor * epex(7) + offset) / 1000, rel=1e-9)
+
+    metadata = price_interface.get_forecast_metadata()
+    assert metadata["forecast_type"] == "smart_forecast"
+    assert metadata["forecast_source"] == "energyforecast.de"
+    expected = [(factor * epex(hour) + offset) / 1000 for hour in range(8, 24)]
+    assert prices[8:] == pytest.approx(expected, rel=1e-6)
 
 
 def test_tibber_energyforecast_disabled(monkeypatch):
@@ -1067,6 +1091,10 @@ def test_smartenergy_at_energyforecast_disabled(monkeypatch):
     price_interface = PriceInterface(
         {
             "source": "smartenergy_at",
+            # Not a typo in spite of the name: the SmartEnergy path only reaches
+            # the energyforecast fallback when tgt_duration exceeds the 24 hourly
+            # values it always builds, and this scenario asks for 8. Turning the
+            # option on here would change nothing but the config dump.
             "energyforecast_enabled": False,
         },
         time_frame_base=3600,
@@ -1218,17 +1246,24 @@ def test_energyforecast_config_validation():
     monkeypatch_instance.undo()
 
 
-def test_energyforecast_insufficient_overlap(monkeypatch):
-    """Test energyforecast prediction with insufficient overlapping data."""
-    # Only 2 hours of overlap (less than MIN_OVERLAP_HOURS=6)
+def test_energyforecast_insufficient_overlap(monkeypatch, caplog):
+    """Two known hours is under the six the learning asks for, so it declines.
+
+    A regression through two points always fits perfectly and says nothing
+    about tomorrow, which is what the minimum is there to prevent. Prices are
+    still written - the next fallback takes over.
+    """
+    midnight = datetime(2025, 10, 20, 0, tzinfo=timezone.utc)
     today = [
         {
-            "total": 250,
+            "total": 0.25,
             "energy": 0.1,
-            "startsAt": f"2025-10-20T{i:02d}:00:00.000Z",
+            "startsAt": (midnight + timedelta(hours=hour)).isoformat(
+                timespec="milliseconds"
+            ),
             "currency": "EUR",
         }
-        for i in range(2)
+        for hour in range(2)
     ]
     tibber_response = {
         "data": {
@@ -1244,16 +1279,19 @@ def test_energyforecast_insufficient_overlap(monkeypatch):
         }
     }
 
-    energyforecast_data = {
-        "data": [
-            {
-                "start": f"2025-10-20T{i:02d}:00:00.000Z",
-                "end": f"2025-10-20T{i+1:02d}:00:00.000Z",
-                "price_ct_per_kwh": 10.0,
-            }
-            for i in range(4)
-        ]
-    }
+    energyforecast_data = [
+        {
+            "start": (midnight + timedelta(hours=hour)).isoformat(
+                timespec="milliseconds"
+            ),
+            "end": (midnight + timedelta(hours=hour + 1)).isoformat(
+                timespec="milliseconds"
+            ),
+            "price": 0.10,
+            "price_origin": "market",
+        }
+        for hour in range(48)
+    ]
 
     def fake_post(url, headers=None, json=None, timeout=None):
         class R:
@@ -1263,9 +1301,7 @@ def test_energyforecast_insufficient_overlap(monkeypatch):
             def json(self):
                 if "tibber" in url:
                     return tibber_response
-                elif "energyforecast" in url:
-                    return energyforecast_data
-                return {}
+                return energyforecast_data
 
         return R()
 
@@ -1290,9 +1326,10 @@ def test_energyforecast_insufficient_overlap(monkeypatch):
         timezone=timezone.utc,
     )
 
-    # Should handle gracefully (fallback to simple repetition when insufficient overlap)
-    price_interface.update_prices(
-        4, start_time=datetime(2025, 10, 20, 0, tzinfo=timezone.utc)
-    )
+    with caplog.at_level("WARNING"):
+        price_interface.update_prices(4, start_time=midnight)
+
     prices = price_interface.get_current_prices()
     assert len(prices) == 4
+    assert "Insufficient overlap for learning" in caplog.text
+    assert price_interface.get_forecast_metadata()["forecast_type"] != "smart_forecast"
