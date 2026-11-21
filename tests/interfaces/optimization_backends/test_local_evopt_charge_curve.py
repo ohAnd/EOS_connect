@@ -381,3 +381,46 @@ def test_a_quarter_hourly_day_keeps_to_the_real_curve_in_every_slot():
             f"slot {t}: {charged_wh * 4:.0f} W planned at {soc:.1f} % SOC, "
             f"curve allows {curve(soc):.0f} W"
         )
+
+
+# ---------------------------------------------------------------------------
+# The curve and the plan's memory
+# ---------------------------------------------------------------------------
+
+
+PLAN_START = _real_datetime(2026, 6, 1, 11, 0, tzinfo=ZoneInfo("Europe/Berlin"))
+
+
+def test_every_run_of_the_curve_is_held_against_the_previous_plan():
+    """
+    Plan stability applies per run, not per optimization.
+
+    The curve builds a fresh optimizer for each run, and it is one of those runs
+    whose plan goes out. A run left without the previous plan is free to flip, which
+    is the whole thing plan stability exists to stop - and with a curve configured
+    that would have been every run of every cycle.
+    """
+    # Run 1 plans past the knee, so run 2 gets lower limits: two optimizers built.
+    backend, seen = _fake_backend([[4000.0, 6000.0, 7000.0]])
+    attached = []
+    backend._attach_previous_plan = lambda optimizer, start: attached.append(start)
+
+    backend._solve_with_charge_curve(
+        EVOPT_REQ, EOS_REQ, 60, None, 0.0, _knee_curve, PLAN_START
+    )
+
+    assert len(attached) == len(seen) == 2
+    # Both lined up from the same instant, or the two runs would be held against
+    # differently shifted copies of the same plan.
+    assert attached == [PLAN_START, PLAN_START]
+
+
+def test_a_solve_outside_the_chain_is_left_alone():
+    """Without a plan start there is nothing to line up with, so nothing is attached."""
+    backend, _ = _fake_backend([[4000.0, 6000.0, 7000.0]])
+    attached = []
+    backend._attach_previous_plan = lambda optimizer, start: attached.append(start)
+
+    backend._solve_with_charge_curve(EVOPT_REQ, EOS_REQ, 60, None, 0.0, _knee_curve)
+
+    assert attached == []

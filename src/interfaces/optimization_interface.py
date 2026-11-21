@@ -105,6 +105,12 @@ class OptimizationInterface:
                 terminal_soc_value=_terminal_soc_value,
                 max_grid_import_w=_max_imp,
                 max_grid_export_w=_max_exp,
+                plan_stability_weight=config.get(
+                    "local_evopt_plan_stability_weight", 0.25
+                ),
+                plan_stability_scope=config.get(
+                    "local_evopt_plan_stability_scope", "managed_loads"
+                ),
             )
             self.backend_type = "local_evopt"
             logger.info(

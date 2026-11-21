@@ -147,3 +147,21 @@ def test_the_exported_type_groups_match_the_runtime_ones():
         "cover": list(presets.COVER_TYPES),
         "season": list(presets.SEASON_TYPES),
     }, "re-run scripts/export_config_schema.py"
+
+
+def test_the_efficiency_sources_match():
+    from src.config_web.schema import (
+        MANAGED_LOAD_EFFICIENCY_REFERENCES,
+        MANAGED_LOAD_EFFICIENCY_SOURCES,
+    )
+    from src.loads import efficiency
+
+    assert sorted(MANAGED_LOAD_EFFICIENCY_SOURCES) == sorted(efficiency.SOURCES)
+    assert sorted(MANAGED_LOAD_EFFICIENCY_REFERENCES) == sorted(efficiency.REFERENCES)
+
+
+def test_the_planning_modes_match():
+    from src.config_web.schema import MANAGED_LOAD_PLANNING_MODES
+    from src.loads.models.thermal import PLANNING_MODES
+
+    assert sorted(MANAGED_LOAD_PLANNING_MODES) == sorted(PLANNING_MODES)

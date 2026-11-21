@@ -130,6 +130,11 @@ UNKNOWNS = 5
 SAMPLE_LIMIT = 2000
 CONFIDENCE_TARGET_SAMPLES = 30
 
+# A heat meter turns the COP into a measurement instead of a fit: heat out over electricity
+# in, per running window. Rows that carry it are fitted on their own, and the result is
+# held in the room-temperature fit rather than left for it to argue with. See `_cop_rows`.
+HEAT_METER_MIN_ROWS = 3
+
 # Ambient spread the slope needs before it means anything. Below this the ridge holds b
 # at its configured value and the fit says the slope was not identified.
 COP_FIT_MIN_SPAN_K = 3.0
@@ -247,9 +252,33 @@ class ThermalCalibrator:
     """
 
     def __init__(self, volume_m3, surface_m2, loss_coefficient, cop_nominal,
-                 air_coefficient=0.0, cover_loss_factor=1.0, idle_power_w=None):
+                 air_coefficient=0.0, cover_loss_factor=1.0, idle_power_w=None,
+                 loss_coefficient_min=LOSS_COEFFICIENT_MIN,
+                 loss_coefficient_max=LOSS_COEFFICIENT_MAX,
+                 learn_cop=True, min_window_change_k=0.0):
         self.volume_m3 = float(volume_m3 or 0.0)
         self.surface_m2 = float(surface_m2 or 0.0)
+        # The plausibility band for the loss coefficient belongs to the kind of store,
+        # not to this module: a pool in a breeze loses fifty times what a renovated
+        # house does per square metre, and one band cannot hold both. The defaults are
+        # the ones every store had before the band became a parameter.
+        self.loss_min = float(loss_coefficient_min)
+        self.loss_max = max(self.loss_min, float(loss_coefficient_max))
+        # Whether the room-temperature fit may move the COP. A store that heats while
+        # the sun shines - a house planned around PV - cannot separate the two from its
+        # temperature alone, and must hold the COP rather than let it absorb the sun.
+        # A heat meter, where there is one, measures it regardless of this flag.
+        self.learn_cop = bool(learn_cop)
+        # The smallest temperature change a window must span, on top of the sensor's
+        # resolution. A pool's noise is its thermometer's rounding, so three ticks is
+        # enough. A house's noise is the house: a floor still giving off the heat of the
+        # last run, a door left open, a room the sun just reached. Closing windows on
+        # three hundredths of a kelvin fitted those instead of the losses - a day ahead
+        # the prediction was 0.37 K out on a real house, against 0.18 K with windows
+        # that had to span 0.2 K.
+        self.min_window_change_k = max(0.0, float(min_window_change_k or 0.0))
+        # Where the current COP came from: "configured", "fit" or "heat_meter".
+        self.cop_source = "configured"
 
         # Below this the appliance is standing by, not running. The module default is the
         # coarse 50 W guess every install made do with; a load whose metered circuit never
@@ -262,7 +291,7 @@ class ThermalCalibrator:
         )
 
         self.configured_loss_coefficient = _clamp(
-            float(loss_coefficient or 25.0), LOSS_COEFFICIENT_MIN, LOSS_COEFFICIENT_MAX
+            float(loss_coefficient or 25.0), self.loss_min, self.loss_max
         )
         self.configured_cop_nominal = _clamp(float(cop_nominal or 4.0), COP_MIN, COP_MAX)
         self.configured_air_coefficient = _clamp(
@@ -435,7 +464,9 @@ class ThermalCalibrator:
         if span >= MAX_WINDOW_HOURS:
             return True
         moved = abs(float(last["medium_c"]) - float(first["medium_c"]))
-        return moved >= RESOLUTION_MULTIPLE * self._resolution_k
+        return moved >= max(
+            RESOLUTION_MULTIPLE * self._resolution_k, self.min_window_change_k
+        )
 
     def _close_window(self, keep_last=False):
         """Turn the open window into a row. Returns True when one was produced."""
@@ -474,6 +505,7 @@ class ThermalCalibrator:
             return None
 
         ambients, powers, covers, solars, counters = [], [], [], [], []
+        heat_ends = (first.get("heat_counter_kwh"), last.get("heat_counter_kwh"))
         for sample in window:
             try:
                 ambients.append(_observed_ambient(sample))
@@ -499,6 +531,17 @@ class ThermalCalibrator:
             return None
 
         ambient = sum(ambients) / len(ambients)
+        heat_w = None
+        if running and None not in heat_ends:
+            try:
+                delta_kwh = float(heat_ends[1]) - float(heat_ends[0])
+            except (TypeError, ValueError):
+                delta_kwh = -1.0
+            # A counter that went backwards was reset; one that did not move while the
+            # compressor ran is a counter that updates too coarsely for this window.
+            # Neither is a COP of zero.
+            if delta_kwh > 0:
+                heat_w = delta_kwh * 1000.0 / span
         return {
             "timestamp": last["timestamp"],
             # Left-hand side: the rate heat actually accumulated in the store, in watts.
@@ -516,6 +559,8 @@ class ThermalCalibrator:
             "covered_share": sum(covers) / len(covers),
             "solar_w": _window_solar_w(counters, solars, span),
             "span_hours": span,
+            # Thermal output over the window, where a heat meter says so.
+            "heat_w": heat_w,
         }
 
     # -- the fit ------------------------------------------------------------------------
@@ -607,6 +652,7 @@ class ThermalCalibrator:
         prior = self._prior()
         weights = self._weights(rows)
         covered_share = self._identifiability(rows)
+        metered = self._cop_from_heat_meter(rows, weights, prior)
         design = self._design(rows)
         targets = [row["stored_w"] for row in rows]
 
@@ -628,6 +674,12 @@ class ThermalCalibrator:
         # the ambient temperature never varied.
         held = [scale <= 0 for scale in scales]
         held[1] = held[1] or not self.slope_identified
+        if metered is not None:
+            # Measured, so the temperature fit takes it as given.
+            prior[0], prior[1] = metered
+            held[0] = held[1] = True
+        elif not self.learn_cop:
+            held[0] = held[1] = True
         for col in range(UNKNOWNS):
             if scales[col] <= 0:
                 scales[col] = 1.0
@@ -663,7 +715,47 @@ class ThermalCalibrator:
 
         estimate = [solution[col] / scales[col] for col in range(UNKNOWNS)]
         self._apply(estimate, rows, weights, design, targets)
+        if metered is not None:
+            self.cop_source = "heat_meter"
+        else:
+            self.cop_source = "fit" if self.learn_cop else "configured"
         return True
+
+    def _cop_from_heat_meter(self, rows, weights, prior):
+        """
+        The COP curve straight from a heat meter, as (intercept, slope), or None.
+
+        Heat out over electricity in, per running window, regressed on the air
+        temperature. The level is a direct measurement and needs no prior; the slope is
+        pulled towards the configured one with the same weight as in the main fit, and
+        held at it outright until the history spans a range of air temperatures - the
+        same rule the main fit applies. Fitted around the mean temperature of the
+        windows, so the two do not trade off against each other. On a real house the
+        level settled within two days (4.1 at 7 C against 4.0 after a fortnight) while
+        the slope needed the first cold spell.
+        """
+        pairs = [
+            (row["ambient_c"], row["heat_w"] / row["power_w"], row["power_w"] * weight)
+            for row, weight in zip(rows, weights)
+            if row.get("heat_w") and row["power_w"] >= IDLE_POWER_W
+        ]
+        if len(pairs) < HEAT_METER_MIN_ROWS:
+            return None
+        # Weighted by electrical energy, so a long steady run outweighs a short start.
+        total = sum(weight for _, _, weight in pairs)
+        if total <= 0:
+            return None
+        mean_t = sum(t * weight for t, _, weight in pairs) / total
+        mean_cop = sum(cop * weight for _, cop, weight in pairs) / total
+        temps = [t for t, _, _ in pairs]
+
+        slope = prior[1]
+        if max(temps) - min(temps) >= COP_FIT_MIN_SPAN_K:
+            s_tt = sum(weight * (t - mean_t) ** 2 for t, _, weight in pairs)
+            s_tc = sum(weight * (t - mean_t) * (cop - mean_cop) for t, cop, weight in pairs)
+            ridge = RIDGE_SAMPLES * (s_tt / len(pairs))
+            slope = (s_tc + ridge * prior[1]) / (s_tt + ridge) if s_tt > 0 else prior[1]
+        return mean_cop - slope * mean_t, slope
 
     def _prior(self):
         """The configured values, as (a, b, k_open, k_covered)."""
@@ -689,10 +781,10 @@ class ThermalCalibrator:
         """Bound the solution, convert it to the reported form, and score the fit."""
         intercept, slope, loss, covered_loss, solar = estimate
 
-        loss = _clamp(loss, LOSS_COEFFICIENT_MIN, LOSS_COEFFICIENT_MAX)
+        loss = _clamp(loss, self.loss_min, self.loss_max)
         # A cover that made a pool lose heat faster would be a fitting artefact, so the
         # covered coefficient is bounded by the open one rather than trusted past it.
-        covered_loss = _clamp(covered_loss, LOSS_COEFFICIENT_MIN, loss)
+        covered_loss = _clamp(covered_loss, self.loss_min, loss)
 
         nominal = _clamp(
             intercept + slope * COP_REFERENCE_AMBIENT_C, COP_MIN, COP_MAX
@@ -825,6 +917,7 @@ class ThermalCalibrator:
             "residual_w": self.residual_w,
             "signal_w": self.signal_w,
             "fit_quality": self.fit_quality(),
+            "cop_source": self.cop_source,
         }
 
     def restore(self, state):
@@ -832,10 +925,14 @@ class ThermalCalibrator:
         if not isinstance(state, dict):
             return
         loss = state.get("loss_coefficient")
-        if isinstance(loss, (int, float)) and LOSS_COEFFICIENT_MIN <= loss <= LOSS_COEFFICIENT_MAX:
+        if isinstance(loss, (int, float)) and self.loss_min <= loss <= self.loss_max:
             self.loss_coefficient = float(loss)
+        # A COP this store is not allowed to learn is not restored either - unless a
+        # heat meter measured it. Otherwise a value fitted before the rule existed
+        # would outlive the rule.
+        cop_restorable = self.learn_cop or state.get("cop_source") == "heat_meter"
         cop = state.get("cop_nominal")
-        if isinstance(cop, (int, float)) and COP_MIN <= cop <= COP_MAX:
+        if cop_restorable and isinstance(cop, (int, float)) and COP_MIN <= cop <= COP_MAX:
             self.cop_nominal = float(cop)
         cover = state.get("cover_loss_factor")
         if isinstance(cover, (int, float)) and COVER_FACTOR_MIN <= cover <= 1.0:
@@ -844,7 +941,7 @@ class ThermalCalibrator:
         if isinstance(solar, (int, float)) and 0.0 <= solar <= SOLAR_GAIN_MAX:
             self.solar_gain = float(solar)
         air = state.get("air_coefficient")
-        if isinstance(air, (int, float)):
+        if cop_restorable and isinstance(air, (int, float)):
             self.air_coefficient = _clamp(
                 float(air), -AIR_COEFFICIENT_LIMIT, AIR_COEFFICIENT_LIMIT
             )
