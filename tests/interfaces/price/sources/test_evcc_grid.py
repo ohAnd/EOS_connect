@@ -908,12 +908,17 @@ class TestEnergyforecastLearnsFromRealSlotsOnly:
         return rates
 
     def _energyforecast(self):
-        """48 hours from local midnight, spelled in UTC with milliseconds."""
-        start = self.ANCHOR.astimezone(timezone.utc)
+        """48 hours from local midnight, spelled the way the live API answers.
+
+        energyforecast.de returns local time with an offset and milliseconds,
+        ``2026-11-10T13:00:00.000+01:00``. The learning samples are built in
+        UTC, so as raw strings the two sides never meet and there would be
+        nothing to learn from - this is what timestamp_key is for.
+        """
         return [
             {
-                "start": (start + timedelta(hours=hour)).strftime(
-                    "%Y-%m-%dT%H:%M:%S.000Z"
+                "start": (self.ANCHOR + timedelta(hours=hour)).isoformat(
+                    timespec="milliseconds"
                 ),
                 "price": self._epex(hour),
             }

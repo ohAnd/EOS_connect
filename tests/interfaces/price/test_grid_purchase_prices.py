@@ -5,7 +5,11 @@ from datetime import datetime, timezone, timedelta
 
 import pytest
 
-from src.interfaces.price_interface import PriceInterface, STROMLIGNING_API_BASE
+from src.interfaces.price_interface import (
+    PriceInterface,
+    STROMLIGNING_API_BASE,
+    timestamp_key,
+)
 
 # Accessing protected members is fine in white-box tests.
 # pylint: disable=protected-access
@@ -626,6 +630,198 @@ def test_fixed_24h_array_quarter_hour(monkeypatch):
 # ============================================================================
 # Energyforecast Smart Price Prediction Matrix Tests
 # ============================================================================
+
+
+# =========================================================================
+# energyforecast.de: matching the learning samples by instant
+# =========================================================================
+
+_ONE_HOUR_EAST = timezone(timedelta(hours=1))
+
+
+class TestTimestampKey:
+    """Two spellings of one instant have to meet; anything else keeps its own.
+
+    The learning samples and the energyforecast prediction are matched by this
+    key. energyforecast.de answers in local time with an offset
+    (``2026-11-21T00:00:00.000+01:00``), Tibber spells ``startsAt`` the same way,
+    and the EVCC path builds its stamps in UTC - three spellings for the same
+    moments, and a raw string comparison only ever joined two of them.
+    """
+
+    def test_the_same_instant_spelled_two_ways_gets_one_key(self):
+        """UTC and a local offset name the same moment."""
+        assert timestamp_key("2026-11-21T00:00:00.000+01:00") == timestamp_key(
+            "2026-11-20T23:00:00.000Z"
+        )
+
+    def test_utc_written_as_an_offset_also_matches(self):
+        """The EVCC path writes ``+00:00`` where the API writes ``Z``."""
+        assert timestamp_key("2026-11-20T23:00:00+00:00") == timestamp_key(
+            "2026-11-20T23:00:00.000Z"
+        )
+
+    def test_a_datetime_and_its_own_iso_string_agree(self):
+        """Either shape may arrive; they must not key differently."""
+        moment = datetime(2026, 11, 21, 0, 0, tzinfo=_ONE_HOUR_EAST)
+        assert timestamp_key(moment) == timestamp_key(moment.isoformat())
+
+    def test_two_different_instants_do_not_collide(self):
+        """An hour apart stays an hour apart."""
+        assert timestamp_key("2026-11-21T00:00:00+01:00") != timestamp_key(
+            "2026-11-21T01:00:00+01:00"
+        )
+
+    def test_a_stamp_without_a_zone_keeps_its_spelling(self):
+        """No zone names no instant, so there is nothing to convert it to.
+
+        Returning the raw string keeps what the old comparison did: it still
+        matches an identical spelling, and nothing else.
+        """
+        assert timestamp_key("2026-11-21T00:00:00") == "2026-11-21T00:00:00"
+
+    def test_a_stamp_that_is_not_a_date_keeps_its_spelling(self):
+        """Garbage in, the same garbage out - never an exception."""
+        assert timestamp_key("not a date") == "not a date"
+
+
+class TestOneBrokenTimestampInThePrediction:
+    """A stamp the parser cannot read must not take the price update with it.
+
+    timestamp_key() answers with epoch floats for the stamps it understands and
+    with the raw string for the ones it does not, so a single bad entry puts a
+    str and a float into the same ``>`` comparison. Unguarded that raises
+    TypeError out of update_prices() and no price is written at all.
+    """
+
+    FACTOR = 1.19
+    OFFSET = 0.26
+    MIDNIGHT = datetime(2026, 11, 21, 0, 0, tzinfo=_ONE_HOUR_EAST)
+
+    def _epex(self, hour):
+        """EUR/kWh, a curve that moves, so the regression has a slope to find."""
+        return 0.06 + 0.012 * ((hour * 5) % 9)
+
+    def _interface(self, monkeypatch, broken_hour):
+        today = [
+            {
+                "total": self.FACTOR * self._epex(hour) + self.OFFSET,
+                "energy": 0.1,
+                "startsAt": (self.MIDNIGHT + timedelta(hours=hour)).isoformat(
+                    timespec="milliseconds"
+                ),
+                "currency": "EUR",
+            }
+            for hour in range(24)
+        ]
+        tibber = {
+            "data": {
+                "viewer": {
+                    "homes": [
+                        {
+                            "currentSubscription": {
+                                "priceInfo": {"today": today, "tomorrow": []}
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+
+        # Spelled the way energyforecast.de answers: local time with an offset
+        # and milliseconds. One entry carries a stamp nothing can parse.
+        forecast = []
+        for hour in range(48):
+            start = self.MIDNIGHT + timedelta(hours=hour)
+            forecast.append(
+                {
+                    "start": (
+                        "n/a"
+                        if hour == broken_hour
+                        else start.isoformat(timespec="milliseconds")
+                    ),
+                    "end": (start + timedelta(hours=1)).isoformat(
+                        timespec="milliseconds"
+                    ),
+                    "price": self._epex(hour % 24),
+                    "price_origin": "market",
+                }
+            )
+
+        class Response:
+            """Stands in for both APIs; which one is decided by the URL."""
+
+            def __init__(self, payload):
+                self.payload = payload
+
+            def raise_for_status(self):
+                """The stub never fails."""
+
+            def json(self):
+                """The recorded payload."""
+                return self.payload
+
+        monkeypatch.setattr(
+            "src.interfaces.price_interface.requests.post",
+            lambda url, **_kwargs: Response(tibber),
+        )
+        monkeypatch.setattr(
+            "src.interfaces.price_interface.requests.get",
+            lambda url, **_kwargs: Response(forecast),
+        )
+        monkeypatch.setattr(
+            PriceInterface,
+            "_PriceInterface__start_update_service",
+            lambda self: None,
+        )
+        return PriceInterface(
+            {
+                "source": "tibber",
+                "token": "dummy",
+                "energyforecast_enabled": True,
+                "energyforecast_token": "test_token",
+                "energyforecast_market_zone": "DE-LU",
+            },
+            time_frame_base=3600,
+            timezone=_ONE_HOUR_EAST,
+        )
+
+    def test_the_price_update_survives_and_still_learns(self, monkeypatch, caplog):
+        """Broken inside today's hours: it drops out, the other 23 still teach."""
+        iface = self._interface(monkeypatch, broken_hour=3)
+
+        with caplog.at_level("INFO"):
+            iface.update_prices(48, start_time=self.MIDNIGHT)
+
+        prices = iface.get_current_prices()
+        assert len(prices) == 48
+        assert iface.get_forecast_metadata()["forecast_type"] == "smart_forecast"
+        expected = [
+            (self.FACTOR * self._epex(hour % 24) + self.OFFSET) / 1000
+            for hour in range(24, 48)
+        ]
+        assert prices[24:] == pytest.approx(expected, rel=1e-6)
+        # 24 hours sent, one of them unreadable.
+        assert "23 overlapping slots found" in caplog.text
+
+    def test_a_broken_stamp_in_the_tail_costs_the_forecast_but_not_the_run(
+        self, monkeypatch, caplog
+    ):
+        """Broken among tomorrow's hours: one price short, so the set is refused.
+
+        The prediction is taken whole or not at all - a 23-value tail would be
+        padded out by the caller and nobody could tell which hour was invented.
+        Prices are still written, from the next fallback.
+        """
+        iface = self._interface(monkeypatch, broken_hour=30)
+
+        with caplog.at_level("INFO"):
+            iface.update_prices(48, start_time=self.MIDNIGHT)
+
+        prices = iface.get_current_prices()
+        assert len(prices) == 48
+        assert iface.get_forecast_metadata()["forecast_type"] != "smart_forecast"
+        assert "Insufficient future prices from energyforecast" in caplog.text
 
 
 def test_tibber_energyforecast_fallback_enabled(monkeypatch):
