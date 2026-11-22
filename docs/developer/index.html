@@ -336,7 +336,7 @@ battery_interface = factory.create_battery_interface(
                     <h2 id="config-schema"><i class="fas fa-table-list" aria-hidden="true"></i> The config
                         schema</h2>
                     <p><strong><code>src/config_web/schema.py</code> is the single point of truth for every
-                            configuration field.</strong> It holds 127 <code>FieldDef</code> entries across 12
+                            configuration field.</strong> It holds 198 <code>FieldDef</code> entries across 13
                         sections. The web UI, the REST API, the migration logic and this documentation site all
                         read from it. There is no second place to register a setting.</p>
 
@@ -374,7 +374,7 @@ battery_interface = factory.create_battery_interface(
                                 <tr>
                                     <td><code>help_url</code></td>
                                     <td><code>config-battery.html#battery-price</code> &mdash; a page under
-                                        <code>user-guide/</code> and a fragment. All 173 fields have one.</td>
+                                        <code>user-guide/</code> and a fragment. All 198 fields have one.</td>
                                 </tr>
                                 <tr>
                                     <td><code>validation</code>, <code>depends_on</code></td>
@@ -383,7 +383,7 @@ battery_interface = factory.create_battery_interface(
                                 </tr>
                                 <tr>
                                     <td><code>hot_reload</code></td>
-                                    <td>True for 87 fields. Requires matching logic in
+                                    <td>True for 102 fields. Requires matching logic in
                                         <code>src/config_web/hot_reload.py</code>, which pushes the new value
                                         into the running interface instead of asking for a restart.</td>
                                 </tr>
@@ -415,7 +415,7 @@ battery_interface = factory.create_battery_interface(
                     </ol>
                     <div class="scroll-x">
                         <pre><code>python scripts/export_config_schema.py
-# Exported 173 fields and 6 managed-load presets to docs/assets/data/config_schema.json</code></pre>
+# Exported 198 fields and 7 managed-load presets to docs/assets/data/config_schema.json</code></pre>
                     </div>
                     <p>Nothing regenerates that JSON automatically, so the export is a manual step &mdash; but
                         it is a guarded one.
@@ -554,17 +554,19 @@ python src/eos_connect.py</code></pre>
 
                     <h3 id="running-tests">Running the suite</h3>
                     <div class="scroll-x">
-                        <pre><code>python -m pytest                    # the fast lane, 3061 tests
-python -m pytest -m browser         # only the browser tests, 604
-python -m pytest -m ""              # the whole suite, 3665
+                        <pre><code>python -m pytest                    # the fast lane, everything but the browser
+python -m pytest -m browser         # only the browser tests
+python -m pytest -m ""              # the whole suite
 python -m pytest tests/config_web   # one directory
 python -m pytest -k battery_price   # by name
 python -m pytest -m "" -n auto      # the whole suite, in parallel</code></pre>
                     </div>
 
                     <h3 id="test-lanes">Why the default run is not everything</h3>
-                    <p>604 of the 3665 tests drive a real Chromium, and they account for roughly nine
-                        tenths of the wall clock &mdash; the other 3061 finish in about fifteen seconds.
+                    <p>The browser tests drive a real Chromium and account for roughly nine tenths of
+                        the wall clock; everything else finishes in seconds. How many of each there
+                        are at the moment: <code>pytest --collect-only -q</code>, with
+                        <code>-m browser</code> or <code>-m ""</code> for the other two lanes.
                         Running them together meant every change paid for the browser, so they are marked
                         <code>browser</code> and excluded by default:</p>
                     <div class="scroll-x">
@@ -602,61 +604,62 @@ addopts = -m "not browser"</code></pre>
                         own; <code>pythonpath = .</code> does.</p>
 
                     <h3 id="test-layout">Layout</h3>
-                    <p><code>tests/</code> mirrors <code>src/</code>. 128 <code>test_*.py</code> files,
-                        3665 collected tests.</p>
+                    <p><code>tests/</code> mirrors <code>src/</code>. What each directory is for &mdash;
+                        <code>pytest --collect-only -q -m ""</code> says how much is in them:</p>
                     <div class="scroll-x">
                         <table>
                             <thead>
                                 <tr>
                                     <th>Directory</th>
-                                    <th>Files</th>
                                     <th>Covers</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <tr>
                                     <td><code>tests/</code></td>
-                                    <td>6</td>
                                     <td>Cross-cutting behaviour: control states, fresh-install startup,
                                         degraded interface creation, SSL handling.</td>
                                 </tr>
                                 <tr>
                                     <td><code>tests/config_web/</code></td>
-                                    <td>17</td>
                                     <td>Store, schema, REST API, migration, merger, hot reload, backup, the
                                         schema export guard.</td>
                                 </tr>
                                 <tr>
+                                    <td><code>tests/docs/</code></td>
+                                    <td>The published site: anchors, <code>help_url</code> targets, the
+                                        version badge, editing artefacts.</td>
+                                </tr>
+                                <tr>
                                     <td><code>tests/interfaces/</code></td>
-                                    <td>23</td>
                                     <td>Load, battery, PV, EVCC, MQTT, autoscaler, normalizer, update
                                         checker.</td>
                                 </tr>
                                 <tr>
                                     <td><code>tests/interfaces/inverters/</code></td>
-                                    <td>7</td>
                                     <td>Every inverter implementation against the shared contract.</td>
                                 </tr>
                                 <tr>
                                     <td><code>tests/interfaces/optimization_backends/</code></td>
-                                    <td>4</td>
                                     <td>The three backends plus the local MILP model.</td>
                                 </tr>
                                 <tr>
                                     <td><code>tests/interfaces/price/</code></td>
-                                    <td>10</td>
                                     <td>Split further into <code>sources/</code>, <code>battery/</code>,
                                         <code>feedin/</code> and <code>scenarios/</code>.</td>
                                 </tr>
                                 <tr>
+                                    <td><code>tests/loads/</code></td>
+                                    <td>Managed loads: the models, the release gate, calibration, the
+                                        handover to the optimizer.</td>
+                                </tr>
+                                <tr>
                                     <td><code>tests/persistence/</code></td>
-                                    <td>1</td>
                                     <td><code>PvYieldStore</code> &mdash; the hourly yield history the
                                         autoscaler learns from.</td>
                                 </tr>
                                 <tr>
                                     <td><code>tests/web/</code></td>
-                                    <td>5</td>
                                     <td>Browser tests, see below.</td>
                                 </tr>
                             </tbody>
@@ -685,8 +688,9 @@ scripts/install_playwright_deps_userspace.sh      # the alternative, without roo
                     <div class="alert alert-warning">
                         <p>Without Playwright installed, <code>tests/web/</code> removes itself from collection
                             via <code>collect_ignore_glob</code> rather than failing. <strong>A green run does
-                                not prove the browser tests ran</strong> &mdash; check the count. Excluding
-                            <code>tests/web</code>, the suite is 1628 tests.</p>
+                                not prove the browser tests ran</strong> &mdash; check the count against
+                            <code>pytest --collect-only -q -m ""</code> on a machine that has
+                            Playwright.</p>
                     </div>
                     <p>Two harnesses live in that conftest. <code>server</code>/<code>page</code> open a
                         <em>configured</em> install &mdash; the store has been migrated from a real config, so
@@ -1014,7 +1018,7 @@ docs: update MQTT topic table</code></pre>
 ├── src/
 │   ├── eos_connect.py             entry point: wiring, scheduler, Flask routes
 │   ├── config.py                  ConfigManager — yaml + options.json + env bootstrap
-│   ├── interface_factory.py       InterfaceFactory — 10 create_* methods
+│   ├── interface_factory.py       InterfaceFactory — 11 create_* methods
 │   ├── startup_validator.py       startup errors → the __main__ logger → /logs/alerts
 │   ├── log_handler.py             MemoryLogHandler — in-memory log and alert buffers
 │   ├── timeseries_grid.py         shared slot-grid placement (neutral layer: loads + interfaces)
@@ -1025,17 +1029,17 @@ docs: update MQTT topic table</code></pre>
 │   │
 │   ├── config_web/                settings: store, schema, API, migration, hot reload
 │   │   ├── __init__.py            ConfigWebModule — registers both blueprints
-│   │   ├── api.py                 config_bp — /api/config, 12 routes
+│   │   ├── api.py                 config_bp — /api/config, 15 routes
 │   │   ├── backup.py              backup_bp — /api/backup, 3 routes
 │   │   ├── entity_probe.py        "test this entity" probe for the UI
 │   │   ├── timeseries_probe.py    "test this URL" probe for the UI
 │   │   ├── hot_reload.py          applies live changes to running interfaces
 │   │   ├── merger.py              merges stored values into the config dict
 │   │   ├── migration.py           config.yaml / options.json → SQLite, one-time
-│   │   ├── schema.py              127 FieldDef entries + SECTION_META
+│   │   ├── schema.py              198 FieldDef entries + SECTION_META
 │   │   └── store.py               SQLite key/value store, WAL mode
 │   │
-│   ├── interfaces/                16 modules
+│   ├── interfaces/                22 modules
 │   │   ├── base_control.py            shared control state
 │   │   ├── base_inverter.py           abstract inverter contract
 │   │   ├── battery_interface.py
@@ -1068,6 +1072,15 @@ docs: update MQTT topic table</code></pre>
 │   │       ├── optimization_backend_local_evopt.py
 │   │       └── local_evopt/optimizer.py    the built-in PuLP MILP model
 │   │
+│   ├── loads/                     managed loads: models, planning, release gate
+│   │   ├── manager.py             the cycle: demand, placement, handover
+│   │   ├── instance.py            one configured load and its state
+│   │   ├── planner.py             places contingents, reads the optimizer's plan
+│   │   ├── gate.py                the release signal the appliance sees
+│   │   ├── efficiency.py          per-slot COP / ambient weighting
+│   │   ├── injection.py           pushed profiles and contingents
+│   │   ├── presets.py             the appliance types and their starting values
+│   │   └── models/                8 modules — the heated store, external pushes
 │   ├── persistence/
 │   │   └── pv_yield_store.py      hourly PV yield history for the autoscaler
 │   ├── web/                       the application UI (not this site)
@@ -1077,17 +1090,18 @@ docs: update MQTT topic table</code></pre>
 │   ├── json/                      request/response samples + test/ fixtures
 │   └── data/eos_connect.db        the settings and yield database
 │
-├── tests/                         73 test_*.py files, 1772 tests
+├── tests/                         mirrors src/, see Testing
 ├── docs/                          this documentation site
 │   ├── assets/data/config_schema.json    generated by the export script
 │   └── assets/js/                 site.js (nav, TOC, footer),
 │                                  config-reference.js (renders the schema)
 ├── scripts/
+│   ├── build_flow_diagram.py
 │   ├── export_config_schema.py
 │   ├── insert_data_to_db.py
 │   ├── install_playwright_deps_userspace.sh
 │   └── timeseries_doctor.py       offline payload diagnosis, probe verdicts
-├── .github/workflows/             pylint.yaml + 4 Docker image workflows
+├── .github/workflows/             pylint, tests, pages + 4 Docker image builds
 ├── requirements.txt               14 runtime dependencies
 ├── requirements-dev.txt           pytest, pytest-xdist, pylint, black, playwright
 ├── pytest.ini

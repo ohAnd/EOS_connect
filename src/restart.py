@@ -1,7 +1,7 @@
 """
 Restarting EOS Connect from the web interface.
 
-Sixty-six settings are marked ``restart_required``, the UI has shown a banner
+Ninety-five settings are marked ``restart_required``, the UI has shown a banner
 about them for a long time, and until now the only way to act on it was to log
 into the host (issue #336).
 

@@ -79,14 +79,14 @@
                             energy, you pick when&rdquo;. EOS Connect works out how much, places it in the
                             cheapest hours the appliance is allowed to run in, and publishes a
                             <strong>released / blocked</strong> signal you can wire to a relay.
-                            <em>Pool heat pump, sauna, hot water tank, buffer tank, external energy
-                                budget.</em></li>
+                            <em>Pool heat pump, sauna, hot water tank, buffer tank, space heating,
+                                external energy budget.</em></li>
                         <li><strong>Forecast only</strong> &mdash; &ldquo;this is what it <em>will</em>
                             draw, I cannot move it&rdquo;. The values are added to the forecast exactly as
                             given, either fetched from an entity you name or pushed in by your own
                             automation. There is no release signal, because the timing was never ours to
-                            choose. <em>External load profile &mdash; use it for space heating and air
-                                conditioning.</em></li>
+                            choose. <em>External load profile &mdash; use it for air conditioning, or
+                                anything else EOS Connect has no profile of its own for.</em></li>
                     </ul>
 
                     <h3 id="managed-loads-optimizer">How a managed load reaches the optimizer</h3>
@@ -187,12 +187,12 @@
                     <h2 id="managed-load-profiles"><i class="fas fa-shapes" aria-hidden="true"></i>
                         Choosing a profile</h2>
                     <p>A load's <strong>type</strong> is the first thing you set, and it decides which of
-                        the settings below even appear. It is not six separate implementations: four of the
-                        six are the same heated-store model with different numbers in it. What a type
+                        the settings below even appear. It is not seven separate implementations: five of the
+                        seven are the same heated-store model with different numbers in it. What a type
                         actually selects is a set of starting values, where the ambient temperature comes
                         from, and whether a cover and a season mean anything at all.</p>
-                    <p>That is deliberate. A pool, a sauna, a hot water tank and a buffer tank are one
-                        problem with different constants, so modelling them once means the
+                    <p>That is deliberate. A pool, a sauna, a hot water tank, a buffer tank and a house
+                        are one problem with different constants, so modelling them once means the
                         <a href="#managed-loads-calibration">calibration</a> that measures a pool's heat
                         loss measures a sauna's too. Pick the one closest to your appliance.</p>
                     <div class="scroll-x">
@@ -247,6 +247,16 @@
                                         lower target</td>
                                 </tr>
                                 <tr>
+                                    <td class="param-key"><a href="#profile-space-heating">Space
+                                            heating</a></td>
+                                    <td data-label="What it is for" class="param-desc">A heat pump heating
+                                        the house, with the house as the store</td>
+                                    <td data-label="Scheduled">yes</td>
+                                    <td data-label="Ambient temperature">outdoor</td>
+                                    <td data-label="Particular to it" class="param-desc">described as a
+                                        building; planned by temperature</td>
+                                </tr>
+                                <tr>
                                     <td class="param-key"><a href="#profile-external-contingent">External
                                             energy budget</a></td>
                                     <td data-label="What it is for" class="param-desc">&ldquo;Needs 8&nbsp;kWh
@@ -260,7 +270,7 @@
                                     <td class="param-key"><a href="#profile-external-profile">External load
                                             profile</a></td>
                                     <td data-label="What it is for" class="param-desc">A ready-made curve
-                                        &mdash; space heating, air conditioning</td>
+                                        &mdash; air conditioning, anything modelled elsewhere</td>
                                     <td data-label="Scheduled">no &mdash; injected as given</td>
                                     <td data-label="Ambient temperature">not used</td>
                                     <td data-label="Particular to it" class="param-desc">fetched or pushed;
@@ -274,7 +284,7 @@
                             value <em>that</em> profile starts from &mdash; a sauna aims at
                             90&nbsp;&deg;C where a pool aims at 28. That is what the
                             <a href="configuration.html#reference">Every setting</a> list cannot show
-                            you: a field four appliance types share carries one default there, and it is
+                            you: a field five appliance types share carries one default there, and it is
                             the pool's. Raise the detail level above to see more of the settings.</p>
                     </div>
 
@@ -395,7 +405,7 @@
                 <div class="content-section" data-level="standard">
                     <h2 id="managed-loads-operation"><i class="fas fa-clock" aria-hidden="true"></i> When a
                         load may run</h2>
-                    <p>These apply to every scheduled profile &mdash; the four heated stores and the
+                    <p>These apply to every scheduled profile &mdash; the five heated stores and the
                         external energy budget. They are limits the optimizer is given, not preferences it
                         may trade away.</p>
                     <ul>
