@@ -173,3 +173,37 @@ class TestWashingstartOffset:
         response = self._build(current_slot=15, washingstart=3)
         assert len(response["ac_charge"]) == 48
         assert len(response["discharge_allowed"]) == 48
+
+
+def test_an_efficiency_makes_the_same_trip_as_the_mask():
+    """A warm 15:00 must still be 15:00 to the solver, or the preference is backwards."""
+    from src.interfaces.optimization_backends.optimization_backend_local_evopt import (
+        LocalEVOptBackend,
+    )
+
+    backend = LocalEVOptBackend.__new__(LocalEVOptBackend)
+    backend.time_zone = BERLIN
+    backend.time_frame_base = 900
+    efficiency = [0.8] * 192
+    efficiency[60] = 1.0              # 15:00
+    record = {
+        "id": "house", "demand_wh": 3000.0, "max_power_w": 1000.0,
+        "value_eur_per_wh": 0.001, "efficiency": efficiency,
+    }
+    with _at(backend, 6, 0):
+        configs = backend._managed_load_configs([record])
+    assert configs[0].efficiency.index(1.0) == 36      # nine hours after 06:00
+
+
+def test_a_record_without_an_efficiency_gives_the_solver_none():
+    from src.interfaces.optimization_backends.optimization_backend_local_evopt import (
+        LocalEVOptBackend,
+    )
+
+    backend = LocalEVOptBackend.__new__(LocalEVOptBackend)
+    backend.time_zone = BERLIN
+    backend.time_frame_base = 900
+    record = {"id": "pool", "demand_wh": 3000.0, "max_power_w": 1000.0}
+    with _at(backend, 6, 0):
+        configs = backend._managed_load_configs([record])
+    assert configs[0].efficiency is None

@@ -45,15 +45,15 @@ Guidelines
 - Add/adjust tests for logic changes
   - Use [pytest](https://docs.pytest.org/) for all unit and integration tests.
   - Install the tooling with `pip install -r requirements-dev.txt`.
-  - **The suite runs in two lanes.** 604 of the 3665 tests drive a real Chromium and
+  - **The suite runs in two lanes.** The browser tests drive a real Chromium and
     take about nine tenths of the wall clock, so they are marked `browser` and left
     out of the default run:
 
     | command | what it runs | roughly |
     | --- | --- | --- |
-    | `pytest` | everything except the browser tests | ~15 s |
-    | `pytest -m browser` | only the browser tests | ~2 min |
-    | `pytest -m ""` | the whole suite | ~4 min |
+    | `pytest` | everything except the browser tests | seconds |
+    | `pytest -m browser` | only the browser tests | a few minutes |
+    | `pytest -m ""` | the whole suite | a few minutes |
 
     Add `-n auto` to parallelise any of them (`pytest-xdist`). Use `pytest -m ""`
     before opening a PR; CI runs the two lanes as separate jobs and gates on both.

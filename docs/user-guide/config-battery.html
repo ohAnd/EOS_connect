@@ -63,7 +63,33 @@
                     <p>Capacity, the charge and discharge limits, and the state of charge the optimizer
                         plans against. These are the numbers every plan is built on, so a capacity that is
                         out by a third makes every decision out by a third.</p>
+                    <p>Recent Akkudoktor EOS builds describe a battery by a <em>battery profile</em>.
+                        On such a server EOS Connect writes the capacity and
+                        <code>battery.max_charge_power_w</code> as the profile adjustment, the same
+                        place EOS's own migration puts them. The charge and discharge efficiencies
+                        come from the profile, so <code>battery.charge_efficiency</code> and
+                        <code>battery.discharge_efficiency</code> do not reach that optimizer. The
+                        log says so once at startup. If the profile's values do not fit your
+                        battery, choose or create a matching profile in EOSdash. EOS Connect
+                        writes only its own fields, and only when they differ: the profile you
+                        choose and anything else set in EOSdash stay as they are.</p>
                     <div data-schema-section="battery" data-schema-anchor="battery"></div>
+                    <h3 id="charging-curve">The charging curve</h3>
+                    <p>With <code>battery.charging_curve_enabled</code> on, the charge power falls as the
+                        battery fills: the full <code>battery.max_charge_power_w</code> up to 50&nbsp;% SOC,
+                        then less and less, down to 0.05&nbsp;C near full and never below 500&nbsp;W. A
+                        battery temperature sensor lowers it further in the cold and the heat.</p>
+                    <ul>
+                        <li><strong>Real charging</strong> is always held to the curve, whatever the plan
+                            asks for.</li>
+                        <li><strong>The plan</strong> follows the curve only with the built-in optimizer
+                            (<code>local_evopt</code>): every slot is planned with the charge power the
+                            curve allows at the state of charge planned for that slot. The temperature is
+                            taken as it is now for the whole horizon. EOS and EVopt accept one charge limit
+                            for all 48 hours, so they plan with <code>battery.max_charge_power_w</code>.</li>
+                        <li><strong>Discharging</strong> is never limited by the curve. The planned
+                            discharge limit is <code>battery.max_charge_power_w</code>.</li>
+                    </ul>
                 </div>
 
                 <div class="content-section" data-level="standard">
@@ -75,6 +101,27 @@
                         tariff instead of being treated as free. See
                         <a href="daily-use.html#battery-pricing">What your stored energy actually cost</a> in
                         the User Guide for what it is worth in practice.</p>
+                    <p>The four power sensors are read as one energy balance, so they have to be
+                        measured at the same point: <strong>solar in, grid in, household out, battery
+                        in or out</strong>. What the balance cannot place is left unattributed rather
+                        than guessed at.</p>
+                    <ul>
+                        <li><strong>Load power</strong> is the <em>whole</em> household &mdash; heat pump,
+                            wallbox and managed loads included, everything behind the meter except the
+                            battery itself. Naming a partial load (say, the house without the wallbox)
+                            does not simply lose that appliance: the solar it consumed then looks like
+                            surplus, and charging that really came off the grid is booked as free, so
+                            the stored price comes out too low.</li>
+                        <li><strong>Grid power</strong> is the meter, import-positive by default. The
+                            opposite convention is detected from the data rather than assumed, so an
+                            export-positive sensor also works.</li>
+                        <li><strong>Price</strong> is what a kWh <em>drawn from the grid costs right
+                            now</em> &mdash; the import tariff, not a forecast and not your feed-in rate.
+                            Solar charging is costed separately, at the export revenue you gave up,
+                            from the feed-in price under <a href="config-price.html#price">What you pay</a>.</li>
+                    </ul>
+                    <p>On an EVCC data source none of this is yours to wire up: EVCC meters all four
+                        itself and the fields are filled in for you.</p>
                     <div data-schema-section="battery" data-schema-anchor="battery-price"></div>
                 </div>
 

@@ -143,6 +143,8 @@ class ConfigurationManager {
         if (Array.isArray(schemaData.location_based_pv_sources)) {
             LOCATION_BASED_PV_SOURCES = schemaData.location_based_pv_sources;
         }
+        // Per-type starting values for managed loads; see _applyTypeDefaults.
+        this.managedLoadPresets = schemaData.managed_load_presets || {};
         const raw = await valuesRes.json();
 
         // Flatten export to dot-notation
@@ -603,7 +605,11 @@ class ConfigurationManager {
      * @returns {string} Field HTML
      */
     _renderField(f, entryValues = null) {
-        const val = this.values[f.key] ?? f.default;
+        // A managed-load field set to null on purpose - one its type derives, or "no
+        // limit" - shows empty, not the schema default: that default is the pool's.
+        const explicitNull = f.key.startsWith("managed_loads.")
+            && f.key in this.values && this.values[f.key] === null;
+        const val = explicitNull ? null : (this.values[f.key] ?? f.default);
         const isHidden = this._isDependencyHidden(f, entryValues) ? " hidden" : "";
 
         // A field EVCC manages (labels: "evcc_managed") reads out instead of
@@ -1255,8 +1261,41 @@ class ConfigurationManager {
             // Deliberately not added to originalValues, so every field counts as
             // changed and is sent on save.
         }
+        if (section === "managed_loads") {
+            this._applyTypeDefaults(newIdx, this.values[`${section}.${newIdx}.type`]);
+        }
 
         this._selectSection(section);
+    }
+
+    /**
+     * Seed a managed-load entry with what its type starts from.
+     *
+     * The schema holds one default per field, and for the heated stores it is the
+     * pool's - so an entry seeded from the schema alone saved a sauna aiming at 28 C
+     * and a house with a pool's volume. The preset values replace them; the fields a
+     * type derives for itself (a house's volume from its living area) are left empty
+     * so the runtime fills them from the entry's own inputs.
+     * @param {number|string} idx - Entry index
+     * @param {string} type - The entry's type
+     * @returns {boolean} True if a preset was applied
+     */
+    _applyTypeDefaults(idx, type) {
+        const preset = (this.managedLoadPresets || {})[type];
+        if (!preset) {
+            return false;
+        }
+        const prefix = `managed_loads.${idx}.`;
+        for (const [subKey, value] of Object.entries(preset.defaults || {})) {
+            if (subKey === "id" || subKey === "type") {
+                continue;
+            }
+            this.values[prefix + subKey] = value;
+        }
+        for (const subKey of preset.derived_keys || []) {
+            this.values[prefix + subKey] = null;
+        }
+        return true;
     }
 
     /**
@@ -1474,6 +1513,12 @@ class ConfigurationManager {
 
         // Special handling for managed_loads type changes: clear season fields if the new type doesn't support seasons
         const managedLoadTypeMatch = key.match(/^managed_loads\.(\d+)\.type$/);
+        if (managedLoadTypeMatch && this._applyTypeDefaults(managedLoadTypeMatch[1], value)) {
+            // A new type starts from its own values, not from the last type's: redraw
+            // the entry so the form shows them, and send them on save.
+            this._selectSection("managed_loads");
+            return;
+        }
         if (managedLoadTypeMatch) {
             const idx = managedLoadTypeMatch[1];
             const seasonStartKey = `managed_loads.${idx}.season_start`;

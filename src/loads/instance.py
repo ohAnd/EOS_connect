@@ -37,6 +37,7 @@ from .planner import (
     PlanOptions,
     plan_contingent,
 )
+from . import efficiency as slot_efficiency
 from .presets import (
     CONTINGENT_TYPES,
     EXTERNAL_TYPES,
@@ -53,6 +54,21 @@ def _as_ct_per_kwh(eur_per_wh):
     if eur_per_wh is None:
         return None
     return round(eur_per_wh * 100.0 * 1000.0, 2)
+
+
+def _offerable(demand):
+    """
+    Whether *demand* is something an optimizer can be asked to place.
+
+    A store planned by temperature counts even when it wants nothing right now:
+    whether to bank heat ahead of a cheap or sunny hour is the solver's question, not
+    ours. This is the one rule for both sides of the handover - what ``schedulable``
+    offers, and what a load waits on the optimizer for.
+    """
+    if demand is None or (demand.max_power_w or 0) <= 0:
+        return False
+    return demand.store is not None or (demand.total_wh or 0) > 0
+
 
 # How long a contribution computed internally stays valid. Long enough to survive a
 # skipped cycle, short enough that a wedged poll thread stops inflating the forecast
@@ -74,6 +90,7 @@ class ManagedLoad:
         self.type = str(resolved.get("type", "")).strip()
         self.enabled = bool(resolved.get("enabled", True))
         self.priority = int(resolved.get("priority", 100) or 100)
+        self.exclusive_group = str(resolved.get("exclusive_group", "") or "").strip()
         self.subtract_from_base_load = bool(resolved.get("subtract_from_base_load", True))
         self.power_sensor = str(resolved.get("power_sensor", "") or "").strip()
         # The meter an externally fed load's forecast stands in for. Separate from
@@ -201,6 +218,16 @@ class ManagedLoad:
             return False
         return (now - since).total_seconds() > max_age_seconds
 
+    def offers_demand(self):
+        """
+        Whether this load currently has anything for an optimizer to place.
+
+        Mirrors the filter in ``ManagedLoadManager.schedulable``: a load with no energy
+        to deliver is never sent to the optimizer, so no schedule will ever come back
+        for it - and waiting for one is not a fault.
+        """
+        return _offerable(self.last_demand)
+
     def kind_is_contingent(self):
         """Whether this load's timing is ours to choose, rather than merely reported."""
         return self.type in CONTINGENT_TYPES
@@ -295,6 +322,7 @@ class ManagedLoad:
         self.config = resolved
         self.enabled = bool(resolved.get("enabled", True))
         self.priority = int(resolved.get("priority", 100) or 100)
+        self.exclusive_group = str(resolved.get("exclusive_group", "") or "").strip()
         self.max_price_eur_per_wh = self._price_cap(resolved, "max_price_ct_kwh")
 
         if self.gate is not None:
@@ -327,18 +355,20 @@ class ManagedLoad:
             return None, None
 
         self.last_error = None
+        if demand.kind != KIND_PROFILE:
+            demand.efficiency = self._efficiency(demand, ctx)
         self.last_demand = demand
 
         if demand.kind == KIND_PROFILE:
             plan = list(demand.profile_wh or [0.0] * ctx.slot_count)
             release = None
-        elif defer_gate:
+        elif defer_gate and _offerable(demand):
             # Somebody else is doing the placing. Plan anyway - it is what the load
             # falls back to if no schedule arrives - but do not touch the gate: it
             # remembers when it last released, so settling it against a plan that is
             # about to be replaced would start a minimum-runtime hold on a decision
             # nobody made.
-            self._mask_current_slot(demand, ctx)
+            self._mask_current_slot(demand, ctx, scheduled=True)
             plan = self._plan_only(demand, ctx, budget_wh)
             # The gate keeps whatever it last decided until a schedule arrives. Nulling
             # it left the card reporting a bare gate state - no energy figure, no next
@@ -353,7 +383,12 @@ class ManagedLoad:
         # card, the API and the summary flipped between them for as long as the load
         # was scheduled. On a live pool that read as 21 slots and 8.4 kWh appearing and
         # vanishing every couple of minutes with the inputs unchanged.
-        if not (defer_gate and self.last_schedule_at is not None):
+        # A load with nothing to place is not handed to the optimizer, so it settles its
+        # own gate (above) and publishes its own, empty plan here. Keeping the deferred
+        # branch for it latched the gate on the optimizer's last answer - an appliance
+        # left released after its demand was gone, until the staleness fallback fired.
+        deferred = defer_gate and _offerable(demand)
+        if not (deferred and self.last_schedule_at is not None):
             self.last_plan = plan
         self.last_release = release
 
@@ -361,6 +396,40 @@ class ManagedLoad:
             return None, release
 
         return self._contribution(plan, ctx, demand), release
+
+    def _efficiency(self, demand, ctx):
+        """
+        The per-slot efficiency this load is configured to plan with, or [] for none.
+
+        The thermal model works out its own from its COP, and a push may carry one; the
+        outdoor-temperature rule needs neither and is applied here, so a load with no
+        model of its own can still prefer the warm hours. The setting decides which of
+        them counts: ``off`` discards anything a model or a sender supplied.
+        """
+        source = slot_efficiency.source_of(self.config)
+        if source == slot_efficiency.SOURCE_OFF:
+            return []
+        if source == slot_efficiency.SOURCE_AMBIENT:
+            return slot_efficiency.from_ambient(
+                ctx.outdoor_temp_c or ctx.ambient_temp_c,
+                ctx.slot_count,
+                start=ctx.current_slot,
+                feasible=demand.feasible or None,
+                per_k=self.config.get("efficiency_per_k", slot_efficiency.DEFAULT_PER_K),
+                reference=self.config.get(
+                    "efficiency_reference", slot_efficiency.REFERENCE_WARMEST
+                ),
+            )
+        values = list(demand.efficiency or [])
+        if not values:
+            return []
+        return [slot_efficiency.clamp(value) for value in values][: ctx.slot_count]
+
+    def delivered_wh(self, plan=None):
+        """What a plan delivers in units of the best slot - comparable to the demand."""
+        plan = self.last_plan if plan is None else plan
+        efficiency = self.last_demand.efficiency if self.last_demand else None
+        return slot_efficiency.effective_wh(plan, efficiency)
 
     def adopt_schedule(self, schedule, ctx, cost=None):
         """
@@ -395,8 +464,24 @@ class ManagedLoad:
         self.last_demand.slot_reasons = reasons_for_schedule(
             self.last_plan, self.last_demand, ctx
         )
-        self.last_release = self._gate_on(self.last_demand, ctx, self.last_plan)
+        self.last_release = self._gate_on(
+            self.last_demand, ctx, self.last_plan, scheduled=True
+        )
         return self.last_release
+
+    @staticmethod
+    def _active(demand, scheduled=False):
+        """
+        Whether the load may run now at all.
+
+        A store planned by temperature is free to run anywhere below its storage
+        ceiling once a solver is following it - inside the band the plan decides, and
+        the deadband that keeps a self-planned store from hunting would only veto the
+        heat the solver chose to bank. Planned by anything else, the deadband stands.
+        """
+        if scheduled and demand.store is not None:
+            return bool(demand.detail.get("storage_active", True))
+        return bool(demand.detail.get("active", demand.total_wh > 0))
 
     def _plan_only(self, demand, ctx, budget_wh):
         """The placement, without settling the gate on it."""
@@ -407,9 +492,9 @@ class ManagedLoad:
         self._remember_affordable(ctx)
         return plan_contingent(demand, ctx, options, budget_wh=budget_wh)
 
-    def _gate_on(self, demand, ctx, plan):
+    def _gate_on(self, demand, ctx, plan, scheduled=False):
         """Turn a placement into a release decision."""
-        active = bool(demand.detail.get("active", demand.total_wh > 0))
+        active = self._active(demand, scheduled)
         planned_now = (
             0 <= ctx.current_slot < len(plan) and plan[ctx.current_slot] > 0
         )
@@ -423,7 +508,7 @@ class ManagedLoad:
         release["energy_needed_wh"] = round(demand.total_wh, 1)
         return release
 
-    def _mask_current_slot(self, demand, ctx):
+    def _mask_current_slot(self, demand, ctx, scheduled=False):
         """
         A load that must not start right now must not be *forecast* to start now either.
 
@@ -432,7 +517,7 @@ class ManagedLoad:
         agreement. It belongs here rather than inside the planner because the same mask
         is handed out when something else does the placing.
         """
-        active = bool(demand.detail.get("active", demand.total_wh > 0))
+        active = self._active(demand, scheduled)
         feasible = list(demand.feasible) or [True] * ctx.slot_count
         if not active and 0 <= ctx.current_slot < len(feasible):
             feasible[ctx.current_slot] = False
@@ -583,7 +668,7 @@ class ManagedLoad:
         # daily cap and the demand still be met the next day, and reporting that as a
         # limit would send the user to loosen a setting that cost them nothing.
         needed = self.last_demand.total_wh
-        covered = sum(self.last_plan or []) >= needed - 1.0
+        covered = self.delivered_wh() >= needed - 1.0
 
         # Ranked by the slots relaxing it would actually free, not by how many it
         # excluded. On a live pool 56 slots were "too cold to run" and every one of
@@ -655,7 +740,7 @@ class ManagedLoad:
             # Set when no setting can close the gap, so the card stops naming one.
             "over_committed": over_committed,
             "reachable_wh": round(reachable_wh, 1),
-            "shortfall_wh": round(max(0.0, needed - sum(self.last_plan or [])), 1),
+            "shortfall_wh": round(max(0.0, needed - self.delivered_wh()), 1),
         }
 
     def status(self):

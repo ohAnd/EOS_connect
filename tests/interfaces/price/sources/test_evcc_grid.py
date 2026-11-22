@@ -866,3 +866,114 @@ class TestContiguityIsItsOwnQuestion:
             cursor = nxt
         assert is_contiguous(entries, 900) is True
         assert whole_local_days_covered(entries, 900, pytz.timezone("Europe/Berlin")) == 1
+
+
+class TestEnergyforecastLearnsFromRealSlotsOnly:
+    """
+    The energyforecast fallback must learn from what EVCC actually published.
+
+    EVCC serves rates from the current period on, so a fetch at 13:00 starts
+    at 13:00 and fill_price_gaps copies that first price back to midnight.
+    Those 13 backfilled slots went into the regression next to the real EPEX
+    curve, flattened the learned factor and got it rejected, every day until
+    EVCC had tomorrow's prices.
+
+    See issue #376.
+    """
+
+    ZONE = ZoneInfo("Europe/Berlin")
+    ANCHOR = datetime(2026, 11, 10, 0, 0, tzinfo=ZoneInfo("Europe/Berlin"))
+    FACTOR = 1.5
+    OFFSET = 0.12  # EUR/kWh
+
+    @staticmethod
+    def _epex(hour):
+        """EUR/kWh, a curve that moves on both days."""
+        if hour < 24:
+            return 0.08 + 0.01 * (hour % 8)
+        return 0.05 + 0.02 * ((hour - 24) % 5)
+
+    def _evcc_rates(self, first_hour):
+        """Hourly rates from *first_hour* to midnight, as EVCC serves them."""
+        rates = []
+        for hour in range(first_hour, 24):
+            start = self.ANCHOR + timedelta(hours=hour)
+            rates.append(
+                {
+                    "start": start.isoformat(),
+                    "end": (start + timedelta(hours=1)).isoformat(),
+                    "value": self.FACTOR * self._epex(hour) + self.OFFSET,
+                }
+            )
+        return rates
+
+    def _energyforecast(self):
+        """48 hours from local midnight, spelled the way the live API answers.
+
+        energyforecast.de returns local time with an offset and milliseconds,
+        ``2026-11-10T13:00:00.000+01:00``. The learning samples are built in
+        UTC, so as raw strings the two sides never meet and there would be
+        nothing to learn from - this is what timestamp_key is for.
+        """
+        return [
+            {
+                "start": (self.ANCHOR + timedelta(hours=hour)).isoformat(
+                    timespec="milliseconds"
+                ),
+                "price": self._epex(hour),
+            }
+            for hour in range(48)
+        ]
+
+    def _interface(self, monkeypatch, rates):
+        forecast = self._energyforecast()
+
+        def fake_get(url, **_kwargs):
+            class R:
+                """Minimal stand-in for the requests response."""
+
+                def raise_for_status(self):
+                    """The stub never fails."""
+
+                def json(self):
+                    """EVCC grid tariff or the energyforecast prediction."""
+                    if "/api/tariff/grid" in url:
+                        return {"rates": rates}
+                    return forecast
+
+            return R()
+
+        monkeypatch.setattr("src.interfaces.price_interface.requests.get", fake_get)
+        monkeypatch.setattr(
+            PriceInterface, "_PriceInterface__start_update_service", lambda self: None
+        )
+        return PriceInterface(
+            {
+                "source": "evcc",
+                "energyforecast_enabled": True,
+                "energyforecast_token": "test_token",
+                "energyforecast_market_zone": "DE-LU",
+            },
+            time_frame_base=3600,
+            timezone=self.ZONE,
+            evcc_interface=Mock(url="http://evcc.local:7070"),
+        )
+
+    def test_backfilled_morning_does_not_skew_the_learned_factor(
+        self, monkeypatch, caplog
+    ):
+        """Fetched at 13:00: tomorrow follows the real tariff, not repetition."""
+        iface = self._interface(monkeypatch, self._evcc_rates(13))
+        with caplog.at_level("INFO"):
+            iface.update_prices(48, start_time=self.ANCHOR)
+        prices = iface.get_current_prices()
+
+        assert len(prices) == 48
+        assert iface.get_forecast_metadata()["forecast_type"] == "smart_forecast"
+        expected = [
+            (self.FACTOR * self._epex(hour) + self.OFFSET) / 1000
+            for hour in range(24, 48)
+        ]
+        assert prices[24:] == pytest.approx(expected, rel=1e-6)
+        # 13:00 to 23:00, the morning backfill left out.
+        assert "Learning from 11 samples" in caplog.text

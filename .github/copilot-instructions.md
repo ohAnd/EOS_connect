@@ -150,6 +150,29 @@ When making ANY code changes:
 
 4. **Version Consistency**: When `src/version.py` is updated, ensure version display is current on all doc pages
 
+5. **Never write a number the tooling can print**
+
+   A count in prose goes stale without anyone touching the sentence, because
+   what makes it wrong is a change somewhere else. That is how the docs came to
+   claim 173 fields against 198, twelve sections against thirteen, sixty-six
+   settings needing a restart against ninety-five, and six appliance types
+   against seven — none of it caught by a review, because every one of those
+   sentences was correct when it was written.
+
+   - **If the number helps the reader, pin it** in
+     `tests/docs/test_docs_counts.py`, which holds documented counts against the
+     schema. A change elsewhere then turns the suite red instead of rotting the
+     page.
+   - **If it does not, name the command instead** —
+     `pytest --collect-only -q`, `python scripts/export_config_schema.py`. This
+     is the right answer for anything that moves every week, such as test
+     counts.
+   - **The same applies to lists that claim to be complete**: appliance types,
+     optimization backends, price sources, inverters. Adding one to the code
+     means adding it to every list and comparison table that enumerates them —
+     `test_every_managed_load_type_has_a_profile_section` covers one of those,
+     not all.
+
 **Failure to update documentation is considered incomplete work**
 
 ### Commit Preparation
@@ -170,6 +193,8 @@ When making ANY code changes:
    - All tests pass
    - No breaking changes
    - All new functionality implemented
+   - `pytest tests/docs` passes — it guards anchors, `help_url` targets, the
+     version badge and the counts the pages state about the code
 
 3. ✅ **Update README.md** (ALWAYS REQUIRED)
    - Add 1-3 sentence mention of the feature/fix

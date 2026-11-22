@@ -3,8 +3,8 @@ Test staging, and a session-wide safety net against leaked battery threads.
 
 Staging
 -------
-The suite is cheap except for the browser tests: 604 of 3665 tests drive Chromium
-and account for about nine tenths of the wall clock. They are marked ``browser``
+The suite is cheap except for the browser tests: they drive Chromium and account
+for about nine tenths of the wall clock. They are marked ``browser``
 here so the two halves can run as separate CI jobs, and so the default local run is
 the fast one. ``pytest.ini`` sets ``-m "not browser"``; ``-m browser`` and ``-m ""``
 on the command line override it.

@@ -1372,6 +1372,134 @@ def test_a_silent_optimizer_hands_the_load_back_its_own_plan(make_manager, insta
     assert "no schedule from the optimizer" in caplog.text
 
 
+BUDGET = {"id": "budget", "type": "external_contingent", "rated_power_w": 2000}
+
+
+def _push_budget(manager, total_wh):
+    """An external load as a dishwasher drives it: energy owed, or nothing at all."""
+    manager.push("budget", {"total_wh": total_wh, "deadline_hours": 12})
+    manager.run_cycle()
+    return manager.instance("budget")
+
+
+def test_a_load_with_nothing_to_place_is_not_waiting_on_anyone(
+    make_manager, installation, caplog
+):
+    """
+    A load with no demand is never offered to the optimizer, so no schedule can come
+    back for it. That silence is the right answer, not a fault worth a warning every
+    cycle - on a live install an unloaded dishwasher logged one every five minutes.
+    """
+    manager = make_manager([BUDGET], cycle_seconds=60)
+    manager.external_scheduler = True
+    load = _push_budget(manager, 0)
+
+    assert not load.offers_demand()
+    assert manager.schedulable() == []
+    assert load.waiting_for_schedule_since is None
+
+    with caplog.at_level("WARNING"):
+        for _ in range(5):
+            manager.run_cycle()
+
+    assert "no schedule from the optimizer" not in caplog.text
+    assert load.last_release["released"] is False
+
+
+def test_a_load_whose_demand_ends_is_not_left_released(make_manager, installation, caplog):
+    """
+    The optimizer stops answering for a load the moment its demand reaches zero. Holding
+    the gate on its last answer kept the appliance released after its demand was gone -
+    here a pushed budget that expired - until the staleness fallback happened to fire.
+    """
+
+    clock = {"now": NOW}
+    manager = make_manager([BUDGET], cycle_seconds=60, clock=lambda: clock["now"])
+    manager.external_scheduler = True
+    manager.push("budget", {"total_wh": 1500, "deadline_hours": 12, "ttl_minutes": 10})
+    manager.run_cycle()
+    schedule = [0.0] * 48
+    schedule[manager._last_ctx.current_slot] = 1500.0   # pylint: disable=protected-access
+    manager.adopt_schedules({"budget": schedule})
+    load = manager.instance("budget")
+    assert load.last_release["released"] is True
+
+    # The push expires on its own; no new push, so no immediate re-plan either.
+    clock["now"] = NOW + timedelta(minutes=15)
+    with caplog.at_level("WARNING"):
+        manager.run_cycle()
+
+    assert not load.offers_demand()
+    assert load.last_release["released"] is False
+    assert "no schedule from the optimizer" not in caplog.text
+
+
+def test_returning_demand_waits_afresh_rather_than_from_an_old_schedule(
+    make_manager, installation, caplog
+):
+    """
+    Scheduled yesterday, idle overnight, demand again this morning: measuring from
+    yesterday's schedule declared the load stale on its very first cycle back.
+    """
+    manager = make_manager([BUDGET], cycle_seconds=60)
+    manager.external_scheduler = True
+    _push_budget(manager, 1500)
+    manager.adopt_schedules({"budget": [0.0] * 48})
+    load = manager.instance("budget")
+    load.last_schedule_at = load.last_schedule_at - timedelta(hours=12)   # yesterday
+
+    _push_budget(manager, 0)                                   # nothing to place
+    assert load.last_schedule_at is None
+
+    with caplog.at_level("WARNING"):
+        _push_budget(manager, 1500)                            # demand is back
+        manager.run_cycle()
+
+    assert "no schedule from the optimizer" not in caplog.text
+    assert load.waiting_for_schedule_since is not None
+    assert manager.schedulable(), "returning demand is offered to the optimizer again"
+
+
+def test_an_offered_load_still_warns_when_the_optimizer_is_silent(make_manager, installation, caplog):
+    """The silent-optimizer warning itself still fires for a load that *was* offered."""
+    manager = make_manager([BUDGET], cycle_seconds=60)
+    manager.external_scheduler = True
+    load = _push_budget(manager, 1500)
+    load.waiting_for_schedule_since -= timedelta(seconds=600)
+
+    with caplog.at_level("WARNING"):
+        manager.run_cycle()
+
+    assert "no schedule from the optimizer" in caplog.text
+
+
+def test_an_idle_load_stops_reporting_a_fallback(make_manager, installation):
+    """
+    A load that fell back and then ran out of demand is not falling back any more.
+
+    `fallback_active` is cleared by whoever ends the handover, and for a load with
+    nothing to place that is nobody: `schedulable` filters it out before it reaches
+    the line that clears the flag, and `adopt_schedules` only looks at loads with an
+    outstanding offer. The flag would stay up on the card and the API for good,
+    reading as "the optimizer is failing us" where the truth is "nothing to do".
+    """
+    manager = make_manager([BUDGET], cycle_seconds=60)
+    manager.external_scheduler = True
+    load = _push_budget(manager, 1500)
+
+    # Nothing answers, so this cycle hands the load back to its own plan.
+    load.waiting_for_schedule_since -= timedelta(seconds=600)
+    manager.run_cycle()
+    assert load.fallback_active
+    assert load.offered_at is None
+
+    _push_budget(manager, 0)
+
+    assert not load.offers_demand()
+    assert not load.fallback_active
+    assert load.offered_at is None
+
+
 def test_a_load_that_falls_back_rejoins_the_household_forecast(make_manager, installation):
     """Otherwise its energy is in neither place and the optimizer plans around nothing."""
     manager = make_manager([POOL], cycle_seconds=60)
@@ -1439,6 +1567,25 @@ def test_max_age_follows_the_optimizer_cadence_when_known(make_manager, installa
     # the doubled cadence plus grace.
     load.last_schedule_at = load.last_schedule_at - timedelta(seconds=age + 1)
     assert load.schedule_is_stale(manager._clock()[1], age)
+
+
+def test_max_age_makes_room_for_a_slow_solver(make_manager, installation):
+    """
+    #366: a 20-minute solve on a 15-minute interval. The schedule lands when a run
+    ends, so the gap between two of them is the wait *plus* the run - and with the
+    runtime left out, the age of 1920 s called every second gap overdue.
+    """
+    manager = make_manager([POOL], cycle_seconds=60, scheduler_interval=900)
+    manager.external_scheduler = True
+    _run(manager, installation, water_c=20.0)
+    manager.adopt_schedules({"pool": [0.0] * 48})
+    manager.scheduler_runtime = 1200.0
+    age = manager._schedule_max_age()
+    assert age == 900 * 2 + 1200 + 120
+    load = manager.instance("pool")
+    # Two aligned slots apart, with the run finishing four minutes late.
+    load.last_schedule_at = manager._clock()[1] - timedelta(seconds=1800 + 240)
+    assert not load.schedule_is_stale(manager._clock()[1], age)
 
 
 def test_unknown_cadence_keeps_the_cycle_based_age(make_manager):

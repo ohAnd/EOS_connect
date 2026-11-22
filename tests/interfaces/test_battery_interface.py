@@ -1128,3 +1128,43 @@ class TestAnUnreadableSensorDoesNotKillTheUpdateThread:
                 bi._update_state_loop()
 
         assert len(cycles) == 2, "the loop must run again after an unexpected error"
+
+
+# The charging curve as a pure function, shared by the live limit and the plan (#355)
+
+
+@pytest.mark.parametrize("temp", [None, -5, 3, 8, 25, 45, 55])
+def test_the_curve_function_matches_the_live_limit(fast_battery_interface, temp):
+    """charge_power_limit_w is what get_max_charge_power reports, at every SOC."""
+    bi = fast_battery_interface
+    for soc in range(0, 101, 5):
+        bi.current_soc = soc
+        bi.current_temp = temp
+        bi._BatteryInterface__get_max_charge_power_dyn()
+        expected = bi.max_charge_power_dyn
+        assert bi.charge_power_limit_w(soc, temp) == expected, (soc, temp)
+
+
+def test_the_curve_function_changes_no_state(fast_battery_interface):
+    bi = fast_battery_interface
+    bi.current_soc = 20
+    bi._BatteryInterface__get_max_charge_power_dyn()
+    before = bi.max_charge_power_dyn
+    bi.charge_power_limit_w(95)
+    assert bi.max_charge_power_dyn == before
+
+
+def test_the_planning_curve_freezes_todays_temperature(fast_battery_interface):
+    bi = fast_battery_interface
+    bi.current_temp = 3  # 50 % derating
+    curve = bi.charge_curve_for_planning()
+    bi.current_temp = 25
+    assert curve(20) == bi.charge_power_limit_w(20, 3) == 1500
+    assert curve(150) == curve(100), "an SOC beyond 100 % is read as 100 %"
+
+
+def test_there_is_no_planning_curve_when_it_is_disabled(default_config):
+    default_config["charging_curve_enabled"] = False
+    with patch.object(BatteryInterface, "start_update_service", return_value=None):
+        bi = BatteryInterface(default_config)
+    assert bi.charge_curve_for_planning() is None

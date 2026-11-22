@@ -13,6 +13,7 @@ from typing import Optional
 from typing import Any, Dict
 from pathlib import Path
 import sys
+import threading
 import paho.mqtt.client as mqtt
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -45,6 +46,10 @@ class MqttInterface:
         self.enable_mqtt = config_mqtt.get("enabled", False)
         self.mqtt_config_enabled = self.enable_mqtt  # Store original config value
         self.mqtt_connection_failed = False  # Track connection failures
+        # Guards topics_publish / topics_publish_last. The paho network thread
+        # (__on_connect, __on_message) and every loop thread that calls
+        # update_publish_topics read and change them at the same time.
+        self._registry_lock = threading.Lock()
         if not self.enable_mqtt:
             logger.info("[MQTT] MQTT is disabled, skipping initialization.")
             return
@@ -504,12 +509,29 @@ class MqttInterface:
         self.client.loop_start()
         logger.info("[MQTT] Successfully connected to MQTT broker.")
 
+    def __registry_items(self):
+        """
+        Copy of the topic registry, taken under the registry lock.
+
+        ``register_topics`` adds the managed-load topics on the main thread while
+        ``__on_connect`` may be walking the registry on the paho network thread.
+        Iterating the dict itself then raises ``RuntimeError: dictionary changed size
+        during iteration``, which ends the network thread for good. The entries are
+        copied too, so a value changed by another thread cannot change under the
+        caller. A topic added after the copy is subscribed and announced by
+        ``register_topics`` itself. The lock is released before anything is sent.
+        """
+        with self._registry_lock:
+            return [
+                (topic, dict(entry)) for topic, entry in self.topics_publish.items()
+            ]
+
     def __subscribe_needed_topics(self):
         """
         Subscribe to the necessary topics for the MQTT client.
         """
         if self.base_topic:
-            for topic, value in self.topics_publish.items():
+            for topic, value in self.__registry_items():
                 if "command_topic" in value and value["command_topic"]:
                     self.__subscribe(self.base_topic + "/" + value["command_topic"])
 
@@ -592,12 +614,14 @@ class MqttInterface:
             )
             return
         if topic in self.topics_publish:
+            payload = msg.payload.decode()
             try:
-                self.topics_publish[topic]["set_value"] = msg.payload.decode()
+                with self._registry_lock:
+                    self.topics_publish[topic]["set_value"] = payload
                 logger.info(
                     "[MQTT] message received - set value for topic '%s': %s",
                     topic,
-                    self.topics_publish[topic]["set_value"],
+                    payload,
                 )
             except KeyError as e:
                 logger.error(
@@ -616,14 +640,12 @@ class MqttInterface:
                 "battery/soc_max": "soc_max",
             }
             if self.on_mqtt_command and topic in topic_command_map:
-                self.on_mqtt_command(
-                    {topic_command_map[topic]: self.topics_publish[topic]["set_value"]}
-                )
+                self.on_mqtt_command({topic_command_map[topic]: payload})
 
             handler = definition.get("on_command")
             if handler:
                 try:
-                    handler(self.topics_publish[topic]["set_value"])
+                    handler(payload)
                 except Exception:  # pylint: disable=broad-except
                     # A published message has nowhere to return an error to, and this
                     # runs on the paho network thread - an escaping exception there
@@ -722,6 +744,15 @@ class MqttInterface:
     def __publish_topics_on_change(self):
         """
         Publish topics if they have changed since the last publish.
+
+        The caller holds the registry lock, so comparing, publishing and remembering
+        happen as one step. Two threads doing this at once could otherwise send an
+        older value last while ``topics_publish_last`` already holds the newer one,
+        which is then never sent. Publishing under the lock cannot deadlock against
+        the network thread: with ``loop_start`` running, ``client.publish`` only
+        queues the message (it may briefly take paho's callback mutex), and paho
+        >= 2.1 releases that mutex before it runs ``__on_connect`` or
+        ``__on_message``, the only callbacks that take the registry lock.
         """
         for topic, value in self.topics_publish.items():
             # Check if the topic is in the last published topics and if the value has changed
@@ -768,35 +799,33 @@ class MqttInterface:
             return {}
 
         added = {}
-        for topic, definition in (topics or {}).items():
-            if topic in self.topics_publish:
-                logger.warning(
-                    "[MQTT] topic '%s' is already registered - ignoring the duplicate",
-                    topic,
-                )
-                continue
-            entry = {
-                "value": None,
-                "qos": 0,
-                "retain": True,
-                "unit": None,
-                "type": "sensor",
-                "device_class": None,
-                "icon": None,
-                "name": topic,
-            }
-            entry.update(definition)
-            self.topics_publish[topic] = entry
-            self.topics_publish_last[topic] = entry.copy()
-            added[topic] = entry
-
+        with self._registry_lock:
+            for topic, definition in (topics or {}).items():
+                if topic in self.topics_publish:
+                    logger.warning(
+                        "[MQTT] topic '%s' is already registered"
+                        " - ignoring the duplicate",
+                        topic,
+                    )
+                    continue
+                entry = {
+                    "value": None,
+                    "qos": 0,
+                    "retain": True,
+                    "unit": None,
+                    "type": "sensor",
+                    "device_class": None,
+                    "icon": None,
+                    "name": topic,
+                }
+                entry.update(definition)
+                self.topics_publish[topic] = entry
+                self.topics_publish_last[topic] = entry.copy()
+                added[topic] = dict(entry)
         if not added:
             return added
 
         logger.info("[MQTT] registered %d additional topic(s)", len(added))
-        if not self.enable_mqtt:
-            return added
-
         for topic, entry in added.items():
             if entry.get("command_topic"):
                 self.__subscribe(self.base_topic + "/" + entry["command_topic"])
@@ -823,23 +852,26 @@ class MqttInterface:
                     self.port,
                 )
             return
-        for topic, value in topics.items():
-            if topic in self.topics_publish:
-                try:
-                    self.topics_publish[topic]["value"] = value["value"]
-                except KeyError as e:
-                    logger.error(
-                        "[MQTT] KeyError while updating publish topic => %s: %s",
-                        topic,
-                        e,
-                    )
-                except (TypeError, ValueError) as e:
-                    logger.error("[MQTT] Error while updating publish topics: %s", e)
-        self.__publish_topics_on_change()
+        with self._registry_lock:
+            for topic, value in topics.items():
+                if topic in self.topics_publish:
+                    try:
+                        self.topics_publish[topic]["value"] = value["value"]
+                    except KeyError as e:
+                        logger.error(
+                            "[MQTT] KeyError while updating publish topic => %s: %s",
+                            topic,
+                            e,
+                        )
+                    except (TypeError, ValueError) as e:
+                        logger.error(
+                            "[MQTT] Error while updating publish topics: %s", e
+                        )
+            self.__publish_topics_on_change()
 
     def __send_mqtt_discovery_messages(self) -> None:
         """Publish all offered mqtt discovery config messages"""
-        for topic, value in self.topics_publish.items():
+        for topic, value in self.__registry_items():
             self.__publish_discovery_for(topic, value)
 
     def __publish_discovery_for(self, topic, value) -> None:

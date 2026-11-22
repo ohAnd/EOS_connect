@@ -178,6 +178,14 @@ def _padded(mask, length):
     return values + [True] * (length - len(values))
 
 
+def _padded_efficiency(values, length):
+    """An efficiency series at the horizon length, or None for a load without one."""
+    if not values:
+        return None
+    series = [float(value) for value in values][:length]
+    return series + [1.0] * (length - len(series))
+
+
 @dataclass
 class ManagerStats:
     """Counters shown on the status endpoint, for answering "is this thing running"."""
@@ -208,6 +216,10 @@ class ManagedLoadManager:
         # measured *against* how often a schedule is actually expected - see
         # _schedule_max_age - and the manager cannot know it without being told.
         self.scheduler_interval = scheduler_interval
+        # The optimizer's average run time, in seconds, refreshed after every run. A
+        # schedule arrives at the *end* of a run, so a slow solver widens the gap
+        # between schedules by its own duration.
+        self.scheduler_runtime = None
         # Injectable so tests can pin "now". Every planning decision depends on which
         # slot the current moment falls in, so a suite that reads the wall clock passes
         # in the morning and fails after lunch.
@@ -409,6 +421,8 @@ class ManagedLoadManager:
         ctx_base = self._context()
         budget = self._initial_budget(ctx_base)
         self._last_ctx = ctx_base
+        # Slots already taken within each exclusive group, by the loads planned before.
+        taken = {}
 
         for item in self.instances:
             if not item.enabled:
@@ -425,29 +439,23 @@ class ManagedLoadManager:
                 self._hint_pv_counter(item)
             self._record_sample(item, ctx)
             defer = self.external_scheduler and item.kind_is_contingent()
-            if defer:
-                if item.waiting_for_schedule_since is None:
-                    item.waiting_for_schedule_since = ctx_base.now
-                if item.schedule_is_stale(ctx_base.now, self._schedule_max_age()):
-                    defer = False
-                    item.fallback_active = True
-                    # Whatever offer was still outstanding is void: this cycle puts
-                    # the placement into the household forecast, so an answer landing
-                    # late must not be read as "the offer worked".
-                    item.offered_at = None
-                    logger.warning(
-                        "[LOADS] '%s' has had no schedule from the optimizer for over "
-                        "%d s - deciding from its own plan until one arrives",
-                        item.id, self._schedule_max_age(),
-                    )
-                else:
-                    item.fallback_active = False
-            else:
+            if not defer:
                 item.fallback_active = False
                 item.offered_at = None
+            item_budget = self._group_budget(item, budget, taken, ctx.slot_count)
             contribution, release = item.evaluate(
-                ctx, budget_wh=budget, defer_gate=defer
+                ctx, budget_wh=item_budget, defer_gate=defer
             )
+            if defer:
+                defer, replan = self._settle_handover(item, ctx_base)
+                if replan:
+                    # The gate was left for the optimizer and the optimizer is not
+                    # answering. Rare path, and the models' demand() is a pure function
+                    # of the context, so planning again is cheaper than predicting the
+                    # demand before the first pass.
+                    contribution, release = item.evaluate(
+                        ctx, budget_wh=item_budget, defer_gate=False
+                    )
             if defer:
                 # Its energy reaches the optimizer as something to place, not as part
                 # of the household profile. Registering it here as well would have the
@@ -458,6 +466,7 @@ class ManagedLoadManager:
                 if item.kind_is_contingent():
                     self._record_decision(item, ctx, release, origin=ORIGIN_SELF)
             self._consume_budget(budget, item.last_plan)
+            self._take_group_slots(item, taken)
             self._publish_standby(item, ctx)
 
         self.stats.cycles += 1
@@ -465,6 +474,55 @@ class ManagedLoadManager:
         return self.stats.cycles
 
     # -- handing the placing to something that can do it better -----------------------------
+
+    def _settle_handover(self, item, ctx_base):
+        """
+        Who owns this load's placement for the rest of the cycle.
+
+        Called after ``evaluate``, so it judges the demand just computed rather than
+        last cycle's: only a load that is being offered to the optimizer can be
+        waiting on one. Returns ``(defer, replan)`` - whether the optimizer keeps the
+        placement, and whether the load has to be planned again with its gate settled
+        because it does not.
+
+        The two flags are this handover's record, and `schedulable` reads them: it
+        takes a fallback placement back out of the registry only where
+        ``fallback_active`` says there is one.
+        """
+        if not item.offers_demand():
+            # Nothing to place, so nothing is being waited for - this used to warn
+            # every cycle for a dishwasher that simply was not loaded. `evaluate`
+            # settled the gate itself. The clock starts again when demand comes back:
+            # keeping the old schedule time as well declared a load scheduled
+            # yesterday stale on its first cycle this morning.
+            item.waiting_for_schedule_since = None
+            item.last_schedule_at = None
+            # Neither offered nor falling back. Both flags are cleared by whoever ends
+            # the handover, and for an idle load that is nobody else: `schedulable`
+            # filters it out before the line that clears them, so they would stay up
+            # on the card for good - reading as a failing optimizer rather than as no
+            # work to do.
+            item.fallback_active = False
+            item.offered_at = None
+            return False, False
+
+        if item.waiting_for_schedule_since is None:
+            item.waiting_for_schedule_since = ctx_base.now
+        if not item.schedule_is_stale(ctx_base.now, self._schedule_max_age()):
+            item.fallback_active = False
+            return True, False
+
+        logger.warning(
+            "[LOADS] '%s' has had no schedule from the optimizer for "
+            "over %d s - deciding from its own plan until one arrives",
+            item.id, self._schedule_max_age(),
+        )
+        # This cycle puts the placement into the household forecast, so `schedulable`
+        # has to take it back out when it next offers the load, and an answer landing
+        # late must not read as "the offer worked".
+        item.fallback_active = True
+        item.offered_at = None
+        return False, True
 
     def _schedule_max_age(self):
         """
@@ -485,10 +543,15 @@ class ManagedLoadManager:
         cycle, right for a small fast app and too eager beside a slow one. An
         interval of zero or less is "unknown": the old cycle-based age stands, which
         leaves a fast external solver as it was and never makes anything worse.
+
+        The solver's own run time comes on top: the schedule lands when a run ends,
+        and a run that takes minutes moves that end by minutes. Ignoring it fired
+        this warning between every pair of runs of a 20-minute solve (#366).
         """
         interval = int(self.scheduler_interval or 0)
         if interval > 0:
-            return interval * 2 + SCHEDULER_GRACE_SECONDS
+            runtime = max(0, int(self.scheduler_runtime or 0))
+            return interval * 2 + runtime + SCHEDULER_GRACE_SECONDS
         return max(120, self.cycle_seconds * 2)
 
     def schedulable(self):
@@ -518,9 +581,11 @@ class ManagedLoadManager:
         for item in self.instances:
             if not item.enabled or not item.kind_is_contingent():
                 continue
-            demand = item.last_demand
-            if demand is None or demand.total_wh <= 0 or demand.max_power_w <= 0:
+            # One rule with the handover - see `_offerable`. A store planned by
+            # temperature is offered even when it wants nothing right now.
+            if not item.offers_demand():
                 continue
+            demand = item.last_demand
             ctx = self._last_ctx_for.get(item.id)
             slots = ctx.slot_count if ctx else len(demand.feasible or [])
             # Read from *now*, not from whenever the cycle last ran: how far into a run
@@ -534,8 +599,16 @@ class ManagedLoadManager:
                 "max_power_w": float(demand.max_power_w),
                 "value_eur_per_wh": self._value_of(item),
                 "feasible": _padded(demand.feasible, slots),
+                # Per slot, what a Wh is worth against the best slot; the demand above
+                # is in those units. Absent means every slot is equal.
+                "efficiency": _padded_efficiency(demand.efficiency, slots),
+                "exclusive_group": item.exclusive_group,
                 "min_runtime_slots": item.min_runtime_slots(ctx) if ctx else 1,
-                "urgent_wh": float(demand.total_wh) if demand.urgent else 0.0,
+                "urgent_wh": (
+                    float(demand.total_wh) if demand.urgent and demand.store is None
+                    else 0.0
+                ),
+                "store": demand.store,
                 "committed_on_slots": committed_on,
                 "committed_off_slots": committed_off,
                 "already_running": item.is_running(),
@@ -833,9 +906,19 @@ class ManagedLoadManager:
             feed_in_eur_per_wh=self._series(self.sources.feed_in_price, slot_count),
             pv_surplus_wh=self._surplus(slot_count),
             solar_wh=self._series(self.sources.pv_forecast, slot_count),
+            outdoor_temp_c=self._outdoor(slot_count),
             ambient_temp_c=[],
             readings={},
         )
+
+    def _outdoor(self, slot_count):
+        """The raw outdoor forecast per slot, or [] when there is none."""
+        try:
+            hourly = self.sources.temperature_forecast() or []
+        except Exception:  # pylint: disable=broad-except
+            logger.debug("[LOADS] outdoor forecast unavailable", exc_info=True)
+            return []
+        return self._expand_hourly(hourly, slot_count) if hourly else []
 
     def _context_for(self, item, ctx_base):
         """Per-instance context: its own sensors and its own ambient series."""
@@ -852,6 +935,7 @@ class ManagedLoadManager:
             feed_in_eur_per_wh=ctx_base.feed_in_eur_per_wh,
             pv_surplus_wh=ctx_base.pv_surplus_wh,
             solar_wh=ctx_base.solar_wh,
+            outdoor_temp_c=ctx_base.outdoor_temp_c,
             ambient_temp_c=ambient,
             ambient_source=ambient_source,
             ambient_measured_c=measured,
@@ -1265,6 +1349,30 @@ class ManagedLoadManager:
         return [per_slot] * ctx.slot_count
 
     @staticmethod
+    def _group_budget(item, budget, taken, slot_count):
+        """
+        The budget this load may plan into, with its group's taken slots closed.
+
+        The fallback planner places loads one after another in priority order, so a
+        compressor shared by two of them goes to whichever comes first, slot by slot -
+        the same rule the solver applies all at once.
+        """
+        occupied = taken.get(item.exclusive_group) if item.exclusive_group else None
+        if not occupied:
+            return budget
+        base = list(budget) if budget is not None else [float("inf")] * slot_count
+        return [
+            0.0 if index in occupied else value for index, value in enumerate(base)
+        ]
+
+    @staticmethod
+    def _take_group_slots(item, taken):
+        if not item.exclusive_group or not item.last_plan:
+            return
+        occupied = taken.setdefault(item.exclusive_group, set())
+        occupied.update(index for index, value in enumerate(item.last_plan) if value > 0)
+
+    @staticmethod
     def _consume_budget(budget, plan):
         if budget is None or not plan:
             return
@@ -1354,6 +1462,11 @@ class ManagedLoadManager:
                 # averages exactly the window, where a point sample of a passing cloud
                 # would speak for the whole of it.
                 "pv_counter_kwh": self._pv_counter(),
+                # A heat meter's running total, where one is configured. Differenced
+                # across a window like the PV counter, it makes the COP a measurement.
+                "heat_counter_kwh": self._reading_as_float(
+                    ctx.readings.get("heat_sensor"), None
+                ),
                 "solar_w": self._forecast_solar_w(ctx),
                 "ambient_measured_c": ctx.ambient_measured_c,
                 "ambient_forecast_c": ctx.ambient_forecast_c,
