@@ -405,6 +405,28 @@ class TestSupplementaryConnectionRouting:
         assert probe.call_args.args[2] == "http://ha.local:8123"
         assert probe.call_args.kwargs["access_token"] == "supp-tok"
 
+    def test_climate_entity_tests_the_supplementary_connection(self, client):
+        with patch(
+            "src.config_web.api.probe_entity",
+            return_value={"ok": True, "error": "", "value": "21"},
+        ) as probe:
+            client.post(
+                "/api/config/test-entity",
+                data=json.dumps(
+                    {
+                        "key": "battery.sensor_battery_temperature",
+                        "battery.sensor_battery_temperature": "climate.hmip_arbeitszimmer",
+                        **self.EVCC_DS,
+                    }
+                ),
+                content_type="application/json",
+            )
+
+        assert probe.call_args.args[0] == "homeassistant"
+        assert probe.call_args.args[1] == "climate.hmip_arbeitszimmer"
+        assert probe.call_args.args[2] == "http://ha.local:8123"
+        assert probe.call_args.kwargs["access_token"] == "supp-tok"
+
     def test_a_bare_state_key_still_tests_the_evcc_connection(self, client):
         """``pvEnergy`` is a key in EVCC's state, dotless but not an entity id.
 

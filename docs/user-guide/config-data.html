@@ -134,10 +134,10 @@
                         typed in the field that uses them, as
                         <code>group:consumer:&lt;title&gt;</code>, with the title exactly as it
                         appears on EVCC's own energy page (it is case-sensitive). Use <em>Test</em>
-                        next to the field to check it before saving. A Home Assistant entity id left
-                        in one of these fields is cleared when you switch to EVCC: this source
-                        cannot read it, and leaving it would look configured while measuring
-                        nothing.</p>
+                        next to the field to check it before saving. A Home Assistant entity ID
+                        from any domain (for example <code>climate.room</code>) belongs to the
+                        supplementary connection, not EVCC's live state. Configure that second
+                        connection to read it.</p>
                     <p><strong>No wallbox sensor is needed.</strong> EVCC's household meter is a
                         residual &mdash; grid plus solar plus battery, <em>minus</em> every charging
                         point &mdash; so <code>group:home</code> is already the base load without the
@@ -156,7 +156,9 @@
                         <em>through Home Assistant</em> (<code>inverter.type</code> set to
                         homeassistant &mdash; EVCC has no service calls to make), and any price, PV or
                         managed-load forecast you have set to read a Home Assistant entity through
-                        the central data source. Configure a second Home Assistant or openHAB connection under
+                        the central data source. Home Assistant entity IDs from any domain, including
+                        <code>climate.*</code> and <code>binary_sensor.*</code>, are routed there.
+                        Configure a second Home Assistant or openHAB connection under
                         Data Source and those use it; it is off by default and should stay off
                         unless one of these applies. Left unset, those fields are left alone rather
                         than pointed at an address that cannot answer. Two notes: the inverter case

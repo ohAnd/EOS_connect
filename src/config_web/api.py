@@ -1467,10 +1467,11 @@ def _entity_probe_connection(key: str, get_value, data: Optional[dict] = None):
     carry its own host and token. Probing ``data_source.*`` for that one would test a
     connection it never uses, and report a working entity as missing — or the reverse.
 
-    When EVCC is the data source, a field whose value is an ordinary entity id
-    (``sensor.*`` — the battery temperature is the recurring case) reads through
-    the supplementary connection instead: EVCC has no /api/states endpoint, so
-    probing it with an HA entity id would report a working sensor as missing.
+    When EVCC is the data source, a field whose value is an ordinary Home
+    Assistant entity id (for example ``sensor.*`` or ``climate.*`` — the
+    battery temperature is the recurring case) reads through the supplementary
+    connection instead: EVCC has no /api/states endpoint, so probing it with an
+    HA entity id would report a working entity as missing.
     Everything else goes to EVCC, at the address the merge resolved rather than
     whichever of the two copies the store happens to hold.
 

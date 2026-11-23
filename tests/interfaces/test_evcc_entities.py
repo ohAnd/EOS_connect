@@ -69,7 +69,10 @@ def test_malformed_names_are_not_fetchable(name):
     assert not is_evcc_history_entity(name)
 
 
-@pytest.mark.parametrize("name", ["battery.soc", "pvEnergy", "batterySoc"])
+@pytest.mark.parametrize(
+    "name",
+    ["battery.soc", "battery.power", "grid.power", "pvEnergy", "batterySoc"],
+)
 def test_a_state_key_may_or_may_not_be_dotted(name):
     """``pvEnergy`` has no dot and is still a key in the same document.
 
@@ -79,7 +82,18 @@ def test_a_state_key_may_or_may_not_be_dotted(name):
     assert is_evcc_state_key(name)
 
 
-@pytest.mark.parametrize("name", ["sensor.house_power", "group:home", "", None])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "sensor.house_power",
+        "climate.hmip_arbeitszimmer",
+        "binary_sensor.window",
+        "switch.charger",
+        "group:home",
+        "",
+        None,
+    ],
+)
 def test_entity_ids_and_references_are_not_state_keys(name):
     assert not is_evcc_state_key(name)
 
@@ -114,6 +128,12 @@ class TestWhichConnectionAnswers:
 
     def test_a_home_assistant_entity_goes_to_the_second_connection(self):
         assert connection_for("sensor.washer", self.EVCC, self.HA) is self.HA
+
+    def test_climate_entity_goes_to_the_second_connection(self):
+        assert (
+            connection_for("climate.hmip_arbeitszimmer", self.EVCC, self.HA)
+            is self.HA
+        )
 
     def test_nothing_answers_when_there_is_no_second_connection(self):
         """None, not the EVCC connection - a request there could only 404."""

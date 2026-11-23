@@ -48,6 +48,7 @@ EVCC_HISTORY_GROUPS = (
 EVCC_TARIFF_NAMES = ("grid", "feedin")
 
 _PREFIXES = ("group:", "tariff:")
+_EVCC_DOTTED_STATE_KEYS = frozenset({"battery.soc", "battery.power", "grid.power"})
 
 
 def is_evcc_reference(name) -> bool:
@@ -96,14 +97,19 @@ def evcc_entity_parts(name):
 def is_evcc_state_key(name) -> bool:
     """Whether *name* addresses EVCC's live state document.
 
-    ``battery.soc`` is dotted, ``pvEnergy`` is not - both are keys in the same
-    document, so the dot cannot be the test. What it is *not* is a Home Assistant
-    entity id, and ``sensor.`` is what makes one unmistakable.
+    EVCC has a few dotted paths, including ``battery.soc``; its other supported
+    names here are dotless, such as ``pvEnergy``. A dotted Home Assistant entity
+    ID can use any domain (``climate.*``, ``binary_sensor.*``, etc.), so only
+    known EVCC dotted paths count as state keys.
     """
     if not name or not isinstance(name, str):
         return False
     stripped = name.strip()
-    return bool(stripped) and ":" not in stripped and not stripped.startswith("sensor.")
+    if not stripped or ":" in stripped:
+        return False
+    if "." in stripped:
+        return stripped in _EVCC_DOTTED_STATE_KEYS
+    return True
 
 
 def evcc_history_params(entity, start, end, aggregate="15m"):
