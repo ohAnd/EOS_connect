@@ -64,7 +64,7 @@ def _run(settings, load=None, battery=None):
             else {"source": "default", "url": "", "access_token": ""}
         ),
     }
-    resolved = _apply_data_source_inheritance(result, settings)
+    resolved = _apply_data_source_inheritance(result, settings, ConfigSchema())
     return result, resolved
 
 
@@ -417,6 +417,21 @@ def test_supplementary_connection_reaches_the_battery_section():
     result, _settings = _run(settings)
     assert result["battery"]["supplementary_type"] == ""
     assert result["battery"]["supplementary_url"] == ""
+
+
+def test_supplementary_url_uses_schema_default_when_not_saved():
+    """A UI-displayed default URL remains usable when it is absent from storage."""
+    settings = {
+        **EVCC_SETTINGS,
+        "data_source.supplementary_type": "homeassistant",
+        "data_source.supplementary_access_token": "supp-tok",
+    }
+
+    result, _settings = _run(settings)
+
+    assert "data_source.supplementary_url" not in settings
+    assert result["load"]["supplementary_url"] == "http://homeassistant:8123"
+    assert result["battery"]["supplementary_url"] == "http://homeassistant:8123"
 
 
 def test_temp_sensor_stays_readable_through_supplementary_without_a_rewrite():
