@@ -1258,7 +1258,7 @@ class PriceInterface(ForecastMetadataMixin):
             if tzinfo is not None:
                 entry_start_dt = entry_start_dt.astimezone(tzinfo)
 
-            resolution_map = {"15m": 15, "30m": 30, "60m": 60}
+            resolution_map = {"15m": 15, "30m": 30, "60m": 60, "1h": 60}
             minutes = resolution_map.get(resolution_value, 15)
             entry_end_dt = entry_start_dt + timedelta(minutes=minutes)
 

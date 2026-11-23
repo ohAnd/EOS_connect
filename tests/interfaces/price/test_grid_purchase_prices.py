@@ -318,6 +318,64 @@ def test_stromligning_token_parsing_invalid(monkeypatch, token):
     assert price_interface._stromligning_url is None
 
 
+@pytest.mark.parametrize("time_frame_base,slots", [(900, 12), (3600, 3)])
+def test_stromligning_hourly_forecast_entries_cover_their_hour(
+    monkeypatch, caplog, time_frame_base, slots
+):
+    """
+    With forecast=true the API continues the 15m published prices with hourly
+    forecast entries marked resolution "1h". Each must cover its whole hour,
+    not just its first quarter, and must not be reported as missing coverage.
+    """
+    payload = [
+        {
+            "date": f"2025-10-20T22:{minute:02d}:00.000Z",
+            "price": 2.0,
+            "resolution": "15m",
+        }
+        for minute in (0, 15, 30, 45)
+    ] + [
+        {
+            "date": "2025-10-20T23:00:00.000Z",
+            "price": 1.5,
+            "resolution": "1h",
+            "forecast": True,
+        },
+        {
+            "date": "2025-10-21T00:00:00.000Z",
+            "price": 1.0,
+            "resolution": "1h",
+            "forecast": True,
+        },
+    ]
+
+    def fake_get(url, headers=None, timeout=None):
+        # pylint: disable=unused-argument
+        return DummyResponse(payload)
+
+    monkeypatch.setattr("src.interfaces.price_interface.requests.get", fake_get)
+    monkeypatch.setattr(
+        PriceInterface,
+        "_PriceInterface__start_update_service",
+        lambda self: None,
+    )
+
+    price_interface = PriceInterface(
+        {"source": "stromligning", "token": "radius_c/velkommen_gron_el"},
+        time_frame_base=time_frame_base,
+        timezone=timezone.utc,
+    )
+    with caplog.at_level("WARNING"):
+        price_interface.update_prices(
+            slots, start_time=datetime(2025, 10, 20, 22, tzinfo=timezone.utc)
+        )
+
+    per_hour = 3600 // time_frame_base
+    expected = [p / 1000 for p in (2.0, 1.5, 1.0) for _ in range(per_hour)]
+    assert price_interface.get_current_prices() == pytest.approx(expected, rel=1e-9)
+    assert "Incomplete STROMLIGNING price coverage" not in caplog.text
+
+
 def test_akkudoktor_hourly(monkeypatch):
     """Test Akkudoktor API price retrieval (hourly)."""
     # Simulate 48 hourly prices (2 days)
