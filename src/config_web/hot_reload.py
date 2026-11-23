@@ -32,6 +32,7 @@ Supported fields (Priority 2 — Battery SOC):
 Supported fields (Feed-in price source):
 - ``price.feed_in_source``  (immediate reload when switching sources)
 - ``price.feed_in_zone``  (immediate reload when zone changes for Elpris)
+- ``price.feed_in_token``  (immediate reload when the Stromligning IDs change)
 
 Supported fields (Feed-in price adjustments):
 - ``price.feed_in_static_adder``  (also triggers immediate run via ``_PRICE_RUN_TRIGGERS``)
@@ -110,6 +111,7 @@ _FEEDIN_DATA_FIELDS = {
     "price.feed_in_data_url",
     "price.feed_in_data_token",
     "price.feed_in_value_unit",
+    "price.feed_in_token",
 }
 
 _BATTERY_SOC_FIELDS = {
@@ -937,6 +939,9 @@ class HotReloadAdapter:
             ).strip()
             self._feed_in_price.value_unit = str(
                 feedin_config.get("feed_in_value_unit", "") or "EUR/kWh"
+            ).strip()
+            self._feed_in_price.token = str(
+                feedin_config.get("feed_in_token", "") or ""
             ).strip()
             self._applied_keys.append(key)
 

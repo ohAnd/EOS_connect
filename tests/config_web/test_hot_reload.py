@@ -843,6 +843,35 @@ class TestHotReloadFeedInSource:
         assert "price.feed_in_source" in adapter.last_applied
         feed_in_price_interface.update_prices.assert_called_once()
 
+    def test_feed_in_token_change(self, feed_in_price_interface):
+        """Changing price.feed_in_token should update the Stromligning IDs and refetch."""
+        feed_in_price_interface.source = "stromligning"
+        feed_in_price_interface.token = "radius_c"
+        feed_in_price_interface.time_zone = ZoneInfo("UTC")
+        feed_in_price_interface.time_frame_base = 3600
+        feed_in_price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(
+            return_value={
+                "price": {
+                    "feed_in_source": "stromligning",
+                    "feed_in_token": " radius_c/nrgi_produktion ",
+                }
+            }
+        )
+
+        adapter = HotReloadAdapter(
+            feed_in_price_interface=feed_in_price_interface,
+            config_provider=config_provider,
+        )
+        adapter.on_config_changed(
+            "price.feed_in_token", "radius_c", " radius_c/nrgi_produktion "
+        )
+
+        assert feed_in_price_interface.token == "radius_c/nrgi_produktion"
+        assert "price.feed_in_token" in adapter.last_applied
+        feed_in_price_interface.update_prices.assert_called_once()
+
     def test_no_feed_in_interface_no_crash(self):
         """Feed-in source changes with no feed-in interface should not crash."""
         adapter = HotReloadAdapter(feed_in_price_interface=None)

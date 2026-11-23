@@ -548,6 +548,8 @@ feed_in_config = {
     "data_path": price_config.get("feed_in_data_path", "attributes.data"),
     "data_token": price_config.get("feed_in_data_token", ""),
     "value_unit": price_config.get("feed_in_value_unit", "EUR/kWh"),
+    # Stromligning: 'supplierId' or 'supplierId/productId' (production agreement)
+    "token": price_config.get("feed_in_token", ""),
 }
 
 feed_in_price_interface = interface_factory.create_feed_in_price_interface(
