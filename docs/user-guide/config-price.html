@@ -86,6 +86,24 @@
                         per-kWh deduction your buyer makes, and the multiplier for a percentage one. The
                         negative-price switch clamps an hour to zero when the market price goes below it,
                         which matches most Danish contracts.</p>
+
+                    <h3 id="feed-in-stromligning">Danish feed-in prices (Strømligning)</h3>
+                    <p>Set <code>price.feed_in_source</code> to <code>stromligning</code> to be paid
+                        what you are actually paid for an exported kilowatt-hour: the spot price without
+                        VAT, less Energinet&rsquo;s and your grid company&rsquo;s production tariffs, from
+                        <a href="https://stromligning.dk/api/docs/" target="_blank"
+                            rel="noopener">Strømligning</a>. No account or API key is needed.</p>
+                    <p>Put your grid company&rsquo;s ID in <code>price.feed_in_token</code> &mdash; the
+                        first part of the <code>price.token</code> you use for Strømligning import
+                        prices, e.g. <code>radius_c</code>. If you have a production agreement with an
+                        electricity company, add its product ID after a slash
+                        (<code>radius_c/nrgi_produktion</code>) and that company&rsquo;s deduction is
+                        taken off as well; the IDs are listed by
+                        <code>https://stromligning.dk/api/companies?includeProduction=true</code>.</p>
+                    <p>Published prices come per quarter hour and Strømligning&rsquo;s price forecast
+                        fills the rest of the horizon hour by hour, shown as a forecast in the chart.
+                        Prices are in kroner, like the Strømligning import price, so use them together
+                        and give the static adder in øre/kWh. Updates run every 15 minutes.</p>
                 </div>
 
                 <div class="content-section" data-level="standard">
