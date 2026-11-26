@@ -392,6 +392,20 @@ class PvInterface:
         # When Akkudoktor is unavailable, reuse last successful forecast
         self.last_successful_pv_forecast = []
         self.last_successful_temp_forecast = []
+        # The local day each cache was fetched on. Forecast arrays start at local
+        # midnight, so a curve fetched yesterday is a day out of step today and has to
+        # be shifted before it is reused - see ``_reanchor_cached_series``.
+        self._last_successful_pv_forecast_date = None
+        self._last_successful_temp_forecast_date = None
+        # Last good curve per installation, keyed by ``_entry_cache_key``. A failing
+        # installation falls back to its own curve: falling back to the summed cache
+        # instead added every other installation into it once more on each failed
+        # cycle, and the forecast grew fourfold every 15 minutes with four of them.
+        self._pv_entry_cache = {}
+        # True while the temperature array in use is the 15 degC placeholder although
+        # a cache exists - the cache was too old to reuse. See
+        # ``has_real_temperature_forecast``.
+        self._temp_forecast_is_placeholder = False
         self.consecutive_failures = 0
         self.consecutive_temp_failures = 0
         self.max_failures = 24  # Max consecutive failures before using defaults
@@ -544,6 +558,10 @@ class PvInterface:
             # Reset cache when configuration changes (source switch, etc.)
             self.last_successful_pv_forecast = []
             self.last_successful_temp_forecast = []
+            self._last_successful_pv_forecast_date = None
+            self._last_successful_temp_forecast_date = None
+            self._pv_entry_cache = {}
+            self._temp_forecast_is_placeholder = False
             self.consecutive_failures = 0
             self.consecutive_temp_failures = 0
             self._last_temp_fetch = None
@@ -1000,8 +1018,11 @@ class PvInterface:
                 )
                 self.pv_forcast_array = pv_forcast_array
                 self.pv_forcast_array_raw = pv_forcast_array_raw
-            elif self.pv_forcast_array == []:
-                # If there was an error and no forecast was cached, use default values
+            else:
+                # An error and nothing usable from the cache: none was ever fetched, or
+                # it is too old to describe today (see ``_reanchor_cached_series``).
+                # Keeping the previous array instead left a curve from days ago in
+                # place, out of step with the clock, for as long as the outage lasted.
                 logger.warning(
                     "[PV-IF] Using default PV forecast due to previous error: %s",
                     self.pv_forcast_request_error["message"],
@@ -1020,12 +1041,6 @@ class PvInterface:
                     self.pv_forcast_array_raw = self.__get_default_pv_forcast(
                         DEFAULT_PV_NOMINAL_POWER_W
                     )
-            else:
-                # If there was an error but we have a previous forecast, log it
-                logger.warning(
-                    "[PV-IF] Using previous PV forecast due to error: %s",
-                    self.pv_forcast_request_error["message"],
-                )
             # Temperature forecast with minimal configuration (only needs lat/lon)
             # Works for all PV sources: Victron, Solcast, Akkudoktor, etc.
             # Not gated on configuration_valid: the temperature forecast has its own,
@@ -1039,22 +1054,21 @@ class PvInterface:
                     # (e.g. PV Watts leaking into the temperature array) as a
                     # fail-safe on top of the target-aware cache/counter below.
                     if not temp_result or any(v > 60 or v < -60 for v in temp_result):
-                        logger.warning(
-                            "[PV-IF] Temperature forecast API failed - using default"
-                            + " temperature forecast (15°C)"
-                        )
-                        self.temp_forecast_array = (
-                            self.__get_default_temperature_forecast()
-                        )
+                        self.temp_forecast_array = self.__temperature_after_failure()
                     else:
                         self.temp_forecast_array = temp_result
+                        self._temp_forecast_is_placeholder = False
                 elif temp_config:
                     logger.debug(
                         "[PV-IF] Temperature forecast still fresh - keeping the cached"
                         " curve (refresh every %d s)",
                         TEMP_REFRESH_INTERVAL_S,
                     )
-                    self.temp_forecast_array = list(self.last_successful_temp_forecast)
+                    # Fresh means fetched within the hour, which still spans midnight.
+                    self.temp_forecast_array = self._reanchor_cached_series(
+                        self.last_successful_temp_forecast,
+                        self._last_successful_temp_forecast_date,
+                    ) or list(self.last_successful_temp_forecast)
                 else:
                     # lat/lon missing - already reported during config validation
                     self.temp_forecast_array = self.__get_default_temperature_forecast()
@@ -1126,6 +1140,80 @@ class PvInterface:
                 totals[key] = None
         return totals
 
+    def _local_today(self):
+        """Today's date in the configured time zone - the day slot 0 belongs to."""
+        try:
+            tz = pytz.timezone(self.time_zone)
+        except (pytz.UnknownTimeZoneError, AttributeError):
+            tz = pytz.UTC
+        return datetime.now(tz).date()
+
+    def _slots_per_day(self):
+        """Forecast slots in one day at the running resolution."""
+        return 24 * max(1, 3600 // int(self.time_frame_base or 3600))
+
+    def _reanchor_cached_series(self, values, fetched_on):
+        """
+        A cached forecast curve, shifted so that slot 0 is local midnight *today*.
+
+        Every forecast array here starts at local midnight of the day it was fetched.
+        Reused unchanged after midnight it is a day out of step: yesterday's noon sun
+        lands on today's noon, but tomorrow's lands nowhere and today's real one is
+        read as yesterday's. One day old, the curve's second day becomes today and is
+        assumed to repeat tomorrow - nothing is known about tomorrow any more, and
+        persistence is a better guess than a cliff to zero, which reads as "no sun"
+        and buys grid energy for it. Older than that nothing in the curve describes
+        today, so the answer is empty and the caller falls back to its default.
+
+        A cache without a recorded day (set from outside) is returned as it is.
+        """
+        if not values:
+            return []
+        if fetched_on is None:
+            return list(values)
+        days_old = (self._local_today() - fetched_on).days
+        if days_old <= 0:
+            return list(values)
+        if days_old > 1:
+            return []
+        rest = list(values[self._slots_per_day() :])
+        if not rest:
+            return []
+        repeats = len(values) // len(rest) + 1
+        return (rest * repeats)[: len(values)]
+
+    def __temperature_after_failure(self):
+        """
+        The temperature curve to use when this cycle's fetch failed.
+
+        The last fetched curve, re-anchored to today, while the failures stay within
+        ``max_failures``: a few hours old it is still far closer to the real outside
+        temperature than the 15 degC placeholder. The placeholder made a heated house
+        look like it needed no heat at all - and because a cache existed it was still
+        reported as a real forecast, so managed loads preferred it over their own
+        outdoor sensor. Past the limit the placeholder is used and reported as such.
+        """
+        if self.consecutive_temp_failures <= self.max_failures:
+            kept = self._reanchor_cached_series(
+                self.last_successful_temp_forecast,
+                self._last_successful_temp_forecast_date,
+            )
+            if kept:
+                logger.warning(
+                    "[PV-IF] Temperature forecast API failed - keeping the last"
+                    " fetched forecast (failure %d/%d)",
+                    self.consecutive_temp_failures,
+                    self.max_failures,
+                )
+                self._temp_forecast_is_placeholder = False
+                return kept
+        logger.warning(
+            "[PV-IF] Temperature forecast API failed - using default"
+            + " temperature forecast (15°C)"
+        )
+        self._temp_forecast_is_placeholder = bool(self.last_successful_temp_forecast)
+        return self.__get_default_temperature_forecast()
+
     def __temperature_forecast_is_fresh(self):
         """
         True while the cached temperature forecast is young enough to reuse.
@@ -1147,7 +1235,11 @@ class PvInterface:
         none: a consumer with a real outdoor sensor of its own will prefer the fake
         curve over its own measurement, which is exactly what happened to managed loads.
         """
-        return bool(self.temperature_forecast_enabled and self.last_successful_temp_forecast)
+        return bool(
+            self.temperature_forecast_enabled
+            and self.last_successful_temp_forecast
+            and not getattr(self, "_temp_forecast_is_placeholder", False)
+        )
 
     def get_current_temp_forecast(self):
         """
@@ -1530,6 +1622,90 @@ class PvInterface:
                 config_entry.get("power") or DEFAULT_PV_NOMINAL_POWER_W
             )
 
+    @staticmethod
+    def _entry_cache_key(index, config_entry):
+        """Identify an installation across cycles: position and name together."""
+        name = config_entry.get("name") if isinstance(config_entry, dict) else None
+        return f"{index}:{name}"
+
+    def __fetch_single_source(self, fetch):
+        """
+        Fetch a forecast that comes from one source for the whole site (evcc, timeseries).
+
+        On a failure the provider answers with the cache as it was stored - possibly a
+        day out of step. It is replaced with the re-anchored copy; a cache too old to
+        re-anchor is dropped so the caller falls back to its default, while a provider
+        default given for want of any cache is kept.
+
+        Returns:
+            tuple: (curve, whether the fetch failed).
+        """
+        self.pv_forcast_request_error["error"] = None
+        forecast = fetch()
+        if not self.pv_forcast_request_error["error"]:
+            return forecast, False
+        if self.last_successful_pv_forecast:
+            forecast = self._reanchor_cached_series(
+                self.last_successful_pv_forecast, self._last_successful_pv_forecast_date
+            )
+        return forecast, True
+
+    def __summarize_installations(self):
+        """
+        Fetch every configured installation and add the curves up.
+
+        Each installation is judged on its own. One that fails this cycle contributes
+        its own last good curve (re-anchored to today) - never the summed cache the
+        providers hand back on an error, which already contains every installation:
+        adding that in once per failed installation multiplied the forecast by the
+        number of installations on every failed cycle, and an hours-long outage drove
+        it to petawatts until the optimizer could not solve any more. An installation
+        that has not succeeded since startup has no curve of its own and is left out
+        rather than guessed.
+
+        Returns:
+            tuple: (summed curve, whether any installation failed this cycle). The
+            error slot afterwards describes the first failure of the cycle - a later
+            installation's success no longer wipes it.
+        """
+        total = []
+        first_failure = None
+        today = self._local_today()
+        for index, config_entry in enumerate(self.config):
+            logger.debug("[PV-IF] fetching forecast for '%s'", config_entry["name"])
+            key = self._entry_cache_key(index, config_entry)
+            self.pv_forcast_request_error["error"] = None
+            forecast = self.__get_pv_forecast(config_entry)
+            if self.pv_forcast_request_error["error"]:
+                if first_failure is None:
+                    first_failure = dict(self.pv_forcast_request_error)
+                cached, fetched_on = self._pv_entry_cache.get(key, ([], None))
+                if not cached and len(self.config) == 1:
+                    # A single installation's curve is the summed cache.
+                    cached = self.last_successful_pv_forecast
+                    fetched_on = self._last_successful_pv_forecast_date
+                forecast = self._reanchor_cached_series(cached, fetched_on)
+                if not forecast:
+                    logger.warning(
+                        "[PV-IF] No usable earlier forecast for '%s' - left out of"
+                        " this cycle's sum",
+                        config_entry["name"],
+                    )
+                    continue
+                logger.info(
+                    "[PV-IF] '%s' failed this cycle - using its own last good forecast",
+                    config_entry["name"],
+                )
+            elif forecast:
+                self._pv_entry_cache[key] = (list(forecast), today)
+            if not total:
+                total = list(forecast)
+            else:
+                total = [x + y for x, y in zip(total, forecast)]
+        if first_failure is not None:
+            self.pv_forcast_request_error.update(first_failure)
+        return total, first_failure is not None
+
     def get_summarized_pv_forecast(self, scale: bool = True):
         """
         Request PV forecast for each config entry and summarize the values.
@@ -1552,14 +1728,17 @@ class PvInterface:
             return self.__get_default_pv_forcast(0)  # Return zeros for all time slots
 
         forecast_values = []
+        cycle_failed = False
         if self.config_special and self.config_source.get("source") == "evcc":
             logger.debug("[PV-IF] fetching forecast for evcc config")
-            forecast = self.__get_pv_forecast("evcc_config")
-            forecast_values = forecast
+            forecast_values, cycle_failed = self.__fetch_single_source(
+                lambda: self.__get_pv_forecast("evcc_config")
+            )
         elif self.config_source.get("source") == "timeseries":
             logger.debug("[PV-IF] fetching forecast for timeseries config")
-            forecast = self.__get_pv_forecast_timeseries()
-            forecast_values = forecast
+            forecast_values, cycle_failed = self.__fetch_single_source(
+                self.__get_pv_forecast_timeseries
+            )
         elif self.config_source.get("source") == "default" and not self.config:
             # "default" is configuration-free by design: the setup wizard asks for no
             # installation at all, so there is usually nothing here to read a power
@@ -1573,15 +1752,8 @@ class PvInterface:
             )
             forecast_values = self.__get_default_pv_forcast(DEFAULT_PV_NOMINAL_POWER_W)
         else:
-            for config_entry in self.config:
-                logger.debug("[PV-IF] fetching forecast for '%s'", config_entry["name"])
-                forecast = self.__get_pv_forecast(config_entry)
-                # print("values for " + config_entry+ " -> ")
-                # print(forecast)
-                if not forecast_values:
-                    forecast_values = forecast
-                else:
-                    forecast_values = [x + y for x, y in zip(forecast_values, forecast)]
+            forecast_values, cycle_failed = self.__summarize_installations()
+
         # round all values to 1 decimal place
         forecast_values = [round(value, 1) for value in forecast_values]
         logger.debug("[PV-IF] Summarized PV forecast values: %s", forecast_values)
@@ -1589,8 +1761,12 @@ class PvInterface:
         # Cache successful forecast for fallback on future failures. The cache must hold
         # unscaled source values: the autoscaler derives its factors from this array, so a
         # scaled array served from the cache would feed the correction its own output.
-        if forecast_values:
+        # Only a cycle in which every request succeeded is cached: a fallback stored as
+        # the new cache - and the failure count reset with it - kept a stale curve
+        # alive for good and never let the failures add up.
+        if forecast_values and not cycle_failed:
             self.last_successful_pv_forecast = forecast_values.copy()
+            self._last_successful_pv_forecast_date = self._local_today()
             self.consecutive_failures = 0  # Reset failure counter on success
             logger.debug(
                 "[PV-IF] PV forecast cached (%d values) for fallback on future API failures",
@@ -1953,6 +2129,7 @@ class PvInterface:
 
         result = self.__expand_temperature_to_slots(hourly)
         self.last_successful_temp_forecast = list(result)
+        self._last_successful_temp_forecast_date = self._local_today()
         self.consecutive_temp_failures = 0
         self._last_temp_fetch = time.monotonic()
         logger.debug(
@@ -2236,6 +2413,7 @@ class PvInterface:
 
             if tgt_value == "temperature" and result:
                 self.last_successful_temp_forecast = list(result)
+                self._last_successful_temp_forecast_date = self._local_today()
                 self.consecutive_temp_failures = 0
                 self._last_temp_fetch = time.monotonic()
 
