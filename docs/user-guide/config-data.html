@@ -158,7 +158,10 @@
                         managed-load forecast you have set to read a Home Assistant entity through
                         the central data source. Configure a second Home Assistant or openHAB connection under
                         Data Source and those use it; it is off by default and should stay off
-                        unless one of these applies. Left unset, those fields are left alone rather
+                        unless one of these applies. A URL left at the displayed default
+                        (<code>http://homeassistant:8123</code>) is the one used &mdash; enter the
+                        real address if your instance runs elsewhere, as an openHAB one always does.
+                        With the supplementary source off, those fields are left alone rather
                         than pointed at an address that cannot answer. Two notes: the inverter case
                         needs a <em>Home Assistant</em> supplementary connection specifically, since
                         openHAB cannot serve those service calls either &mdash; and the PV

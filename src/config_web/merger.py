@@ -35,6 +35,19 @@ _DATA_SOURCE_SECTIONS = ("load", "battery")
 # data_source.type values the PV autoscaler can actually read a counter from.
 _AUTOSCALER_SOURCES = frozenset({"homeassistant", "openhab", "evcc"})
 
+# The address the settings page shows for the supplementary connection until
+# one is typed. A save does not store a value left at its default, so every
+# reader of that key has to fall back to this one, not to an empty string.
+_SUPPLEMENTARY_URL_DEFAULT = ConfigSchema().get("data_source.supplementary_url").default
+
+
+def _supplementary_url(all_settings: dict[str, Any]) -> str:
+    """The supplementary URL as the settings page shows it: saved, else default."""
+    value = all_settings.get("data_source.supplementary_url")
+    if value is None:
+        return _SUPPLEMENTARY_URL_DEFAULT
+    return str(value)
+
 
 def build_merged_config(
     bootstrap_config: dict,
@@ -383,11 +396,7 @@ def _apply_supplementary(section: dict, all_settings: dict[str, Any]) -> None:
     supp_type = str(all_settings.get("data_source.supplementary_type", "") or "")
     usable = supp_type in ("homeassistant", "openhab")
     section["supplementary_type"] = supp_type if usable else ""
-    section["supplementary_url"] = (
-        str(all_settings.get("data_source.supplementary_url", "") or "")
-        if usable
-        else ""
-    )
+    section["supplementary_url"] = _supplementary_url(all_settings) if usable else ""
     section["supplementary_access_token"] = (
         str(all_settings.get("data_source.supplementary_access_token", "") or "")
         if usable
@@ -624,7 +633,7 @@ def _apply_inverter_data_source_injection(
                 "Settings > Data Source for the inverter to reach it."
             )
             return
-        ds_url = all_settings.get("data_source.supplementary_url", "")
+        ds_url = _supplementary_url(all_settings)
         ds_token = all_settings.get("data_source.supplementary_access_token", "")
         ds_ssl_ignore = all_settings.get("data_source.supplementary_ssl_ignore", False)
     else:
@@ -666,7 +675,7 @@ def central_connections(all_settings: dict[str, Any]):
             "supplementary_type": all_settings.get(
                 "data_source.supplementary_type", ""
             ),
-            "supplementary_url": all_settings.get("data_source.supplementary_url", ""),
+            "supplementary_url": _supplementary_url(all_settings),
             "supplementary_access_token": all_settings.get(
                 "data_source.supplementary_access_token", ""
             ),
