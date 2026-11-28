@@ -15,6 +15,7 @@ import pytest
 from src.config_web.merger import (
     _apply_data_source_inheritance,
     build_merged_config,
+    central_connections,
 )
 from src.config_web.schema import ConfigSchema
 from src.config_web.store import ConfigStore
@@ -64,7 +65,7 @@ def _run(settings, load=None, battery=None):
             else {"source": "default", "url": "", "access_token": ""}
         ),
     }
-    resolved = _apply_data_source_inheritance(result, settings, ConfigSchema())
+    resolved = _apply_data_source_inheritance(result, settings)
     return result, resolved
 
 
@@ -419,11 +420,12 @@ def test_supplementary_connection_reaches_the_battery_section():
     assert result["battery"]["supplementary_url"] == ""
 
 
-def test_supplementary_url_uses_schema_default_when_not_saved():
+@pytest.mark.parametrize("supp_type", ["homeassistant", "openhab"])
+def test_supplementary_url_uses_schema_default_when_not_saved(supp_type):
     """A UI-displayed default URL remains usable when it is absent from storage."""
     settings = {
         **EVCC_SETTINGS,
-        "data_source.supplementary_type": "homeassistant",
+        "data_source.supplementary_type": supp_type,
         "data_source.supplementary_access_token": "supp-tok",
     }
 
@@ -432,6 +434,49 @@ def test_supplementary_url_uses_schema_default_when_not_saved():
     assert "data_source.supplementary_url" not in settings
     assert result["load"]["supplementary_url"] == "http://homeassistant:8123"
     assert result["battery"]["supplementary_url"] == "http://homeassistant:8123"
+
+
+def test_central_connections_fall_back_to_the_default_url():
+    """The settings checks read the same rule as the merge.
+
+    The API hands ``central_connections`` ``None`` for a key it found neither
+    in the request nor in the store - the merged config has no data_source
+    section to fall back to.
+    """
+    _primary, supplementary = central_connections(
+        {
+            "data_source.type": "evcc",
+            "data_source.url": "http://evcc.local:7070",
+            "data_source.supplementary_type": "homeassistant",
+            "data_source.supplementary_url": None,
+        }
+    )
+    assert supplementary is not None
+    assert supplementary.url == "http://homeassistant:8123"
+
+
+def test_central_ha_entity_uses_the_default_supplementary_url(tmp_path):
+    """A price entity read through the central source reaches the default HA."""
+    store = ConfigStore(str(tmp_path / "price.db"))
+    store.open()
+    try:
+        store.set_batch(
+            {
+                **EVCC_SETTINGS,
+                "data_source.supplementary_type": "homeassistant",
+                "data_source.supplementary_access_token": "tok",
+                "price.source": "timeseries",
+                "price.use_ha_central_data_source": True,
+                "price.ha_sensor_name": "sensor.grid_prices",
+            }
+        )
+        merged = build_merged_config({}, store, ConfigSchema())
+    finally:
+        store.close()
+    assert merged["price"]["data_url"] == (
+        "http://homeassistant:8123/api/states/sensor.grid_prices"
+    )
+    assert merged["price"]["data_token"] == "tok"
 
 
 def test_temp_sensor_stays_readable_through_supplementary_without_a_rewrite():
@@ -569,6 +614,18 @@ class TestHomeAssistantInverterUnderEvcc:
             },
         )
         assert merged["inverter"]["url"] == "http://ha.local:8123"
+        assert merged["inverter"]["token"] == "tok"
+
+    def test_an_unsaved_url_uses_the_default(self, tmp_path):
+        """The URL the settings page shows is the one the inverter gets."""
+        merged = self._merged(
+            tmp_path,
+            **{
+                "data_source.supplementary_type": "homeassistant",
+                "data_source.supplementary_access_token": "tok",
+            },
+        )
+        assert merged["inverter"]["url"] == "http://homeassistant:8123"
         assert merged["inverter"]["token"] == "tok"
 
     def test_without_one_no_address_is_invented(self, tmp_path):
