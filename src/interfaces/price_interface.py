@@ -613,6 +613,21 @@ class PriceInterface(ForecastMetadataMixin):
         """
         return self.price_currency
 
+    def refresh_price_currency(self):
+        """
+        Re-derive the currency after ``src`` changed at runtime.
+
+        Set once in ``__init__`` otherwise, so a live switch from Strømligning
+        to another source kept reporting DKK (and the other way round) until
+        the next restart. Tibber starts from the default again and corrects it
+        from the account on its next fetch, exactly as at startup.
+
+        Returns:
+            str: The currency now reported.
+        """
+        self.price_currency = self.__determine_price_currency()
+        return self.price_currency
+
     def get_forecast_metadata(self):
         """
         The mixin's triple, read from the published snapshot when one exists —

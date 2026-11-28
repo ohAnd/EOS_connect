@@ -805,6 +805,12 @@ class HotReloadAdapter:
                     self._price.drop_fallback_cache()
                 except AttributeError:
                     pass
+                # The currency belongs to the source as well: the dashboard's
+                # symbol and the feed-in currency check read it.
+                try:
+                    self._price.refresh_price_currency()
+                except AttributeError:
+                    pass
             self._price.config_source = price_config
             self._price.data_url = price_config.get("data_url", "").strip()
             self._price.data_path = price_config.get("data_path", "attributes.data").strip()

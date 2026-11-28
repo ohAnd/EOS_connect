@@ -250,6 +250,29 @@ def test_stromligning_quarter_hour_aggregation(monkeypatch):
     )
 
 
+def test_refresh_price_currency_follows_a_live_source_switch(monkeypatch):
+    """The currency is re-derived from src, not kept from startup."""
+    monkeypatch.setattr(
+        PriceInterface,
+        "_PriceInterface__start_update_service",
+        lambda self: None,
+    )
+    price_interface = PriceInterface(
+        {"source": "stromligning", "token": "radius_c"},
+        time_frame_base=3600,
+        timezone=timezone.utc,
+    )
+    assert price_interface.get_price_currency() == "DKK"
+
+    price_interface.src = "smartenergy_at"
+    assert price_interface.refresh_price_currency() == "EUR"
+    assert price_interface.get_price_currency() == "EUR"
+
+    price_interface.src = "stromligning"
+    price_interface.refresh_price_currency()
+    assert price_interface.get_price_currency() == "DKK"
+
+
 def test_stromligning_request_names_eos_connect(monkeypatch):
     """The request carries a User-Agent naming EOS Connect and its version."""
     seen = {}
