@@ -4,7 +4,7 @@ This module provides the `FeedInPriceInterface` class for retrieving and process
 feed-in (export) price data from various sources.
 
 Supported sources:
-    - Elpris (Dänemark): Spot-Preise für stromexport (DKK/kWh and EUR/kWh per hour)
+    - Elpris (Dänemark): Spot-Preise für stromexport (served in EUR/kWh)
     - Strømligning (Denmark): sale price after production tariffs (DKK/kWh)
     - EPEX-Spot (EU/AT): Netto-Börsenpreise via Akkudoktor (in ct/kWh)
     - EVCC: Real-time feed-in tariffs from EVCC charger (in EUR/kWh)
@@ -120,11 +120,13 @@ class FeedInPriceInterface(ForecastMetadataMixin):
         source (str): Source of the feed-in price data
             ('elpris_dk', 'epex_spot', 'evcc', 'timeseries', 'stromligning', 'fixed')
         zone (str): Price zone for Elpris (DK1 or DK2)
-        static_adder_ct_kwh (float): Static adjustment in ct/kWh (e.g., 3.5 for transport costs)
+        static_adder_ct_kwh (float): Static adjustment in the minor unit per kWh —
+            ct/kWh, or øre/kWh for stromligning (e.g., 3.5 for transport costs)
         multiplier (float): Relative multiplier (1.0 = no change, 1.05 = +5%)
         time_frame_base (int): Time frame in seconds (3600 = hourly, 900 = 15-min slots)
         time_zone (pytz.timezone): Timezone for date operations
-        current_feedin_prices (list): Current feed-in prices in EUR/Wh
+        current_feedin_prices (list): Current feed-in prices per Wh, in the
+            source's currency (see get_price_currency)
         default_prices (list): Default fallback prices
         last_successful_prices (list): Last successfully fetched prices for fallback
         consecutive_failures (int): Counter for consecutive API failures
@@ -398,7 +400,8 @@ class FeedInPriceInterface(ForecastMetadataMixin):
         Get current feed-in prices.
 
         Returns:
-            list: Feed-in prices in EUR/Wh
+            list: Feed-in prices per Wh in the source's currency — EUR/Wh,
+            or DKK/Wh for stromligning (see get_price_currency)
         """
         return self.current_feedin_prices
 
@@ -462,7 +465,8 @@ class FeedInPriceInterface(ForecastMetadataMixin):
             start_time (datetime): Start time for retrieval
 
         Returns:
-            list: Prices in EUR/Wh or empty list on error
+            list: Prices per Wh in the source's currency (EUR/Wh, DKK/Wh for
+            stromligning) or empty list on error
         """
         if self.source == "elpris_dk":
             return self._apply_adjustments(
@@ -743,6 +747,10 @@ class FeedInPriceInterface(ForecastMetadataMixin):
         the multiplier is a plain factor here (1.0 = unchanged), unlike the
         grid-price side's (1 + relative) form; existing configs rely on it.
         negative_price_switch then clamps below zero to 0.
+
+        The adder is in the minor unit of the prices' currency — ct/kWh for
+        EUR, øre/kWh for DKK — and /100000 turns either into the per-Wh major
+        unit the prices are in.
         """
         if not prices:
             return prices
