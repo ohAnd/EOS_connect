@@ -181,6 +181,65 @@ class TestStromligningFeedInSource:
         assert iface._fetch_stromligning_prices(48, ANCHOR) == []
 
 
+class TestStromligningFeedInGaps:
+    """Short series, broken entries and where the chart's forecast hatching starts."""
+
+    def test_published_day_only_repeats_it_as_simple_repetition(self, monkeypatch):
+        """No forecast entries: day two repeats day one and is marked as such."""
+        iface = _interface(monkeypatch, _payload(published_hours=24, forecast_hours=0))
+        iface.update_prices(48, start_time=ANCHOR)
+
+        prices = iface.get_current_feedin_prices()
+        assert len(prices) == 48
+        assert prices[24:] == pytest.approx(prices[:24])
+        assert iface.get_forecast_metadata() == {
+            "forecast_start_index": 24,
+            "forecast_type": "simple_repetition",
+            "forecast_source": None,
+        }
+
+    def test_a_short_forecast_is_marked_where_it_starts(self, monkeypatch):
+        """The forecast starts before the filled tail, so the forecast wins."""
+        iface = _interface(monkeypatch, _payload(published_hours=24, forecast_hours=6))
+        iface.update_prices(48, start_time=ANCHOR)
+
+        prices = iface.get_current_feedin_prices()
+        assert len(prices) == 48
+        metadata = iface.get_forecast_metadata()
+        assert metadata["forecast_start_index"] == 24
+        assert metadata["forecast_type"] == "smart_forecast"
+
+    def test_a_forecast_past_the_window_is_all_real(self, monkeypatch):
+        """Forecast entries beyond the horizon do not move the marker."""
+        iface = _interface(monkeypatch, _payload(published_hours=48, forecast_hours=4))
+        iface.update_prices(48, start_time=ANCHOR)
+
+        assert iface.get_forecast_metadata()["forecast_type"] == "all_real"
+
+    def test_malformed_entries_are_skipped(self, monkeypatch):
+        """Missing date, unknown resolution or a non-number price drop one entry."""
+        payload = _payload(published_hours=48, forecast_hours=0)
+        payload[0] = {"price": 9.9, "resolution": "15m"}
+        payload[1] = dict(payload[1], resolution="5m")
+        payload[2] = dict(payload[2], price=None)
+        payload[3] = "not an entry"
+        iface = _interface(monkeypatch, payload)
+        iface.update_prices(48, start_time=ANCHOR)
+
+        prices = iface.get_current_feedin_prices()
+        assert len(prices) == 48
+        # Only the first hour's four quarters were broken; slot 0 takes the
+        # first known price backwards, slot 1 is untouched.
+        assert prices[0] == pytest.approx(prices[1])
+        assert prices[1] == pytest.approx(0.5055 / 1000)
+
+    def test_only_malformed_entries_fetch_nothing(self, monkeypatch):
+        """Nothing usable is [] so the caller keeps the last good prices."""
+        iface = _interface(monkeypatch, [{"date": "yesterday"}, {"price": 1.0}])
+
+        assert iface._fetch_stromligning_prices(48, ANCHOR) == []
+
+
 def _http_error_get(status, text):
     """A requests.get stand-in whose response fails raise_for_status."""
 
