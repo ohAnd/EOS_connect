@@ -285,7 +285,7 @@ class TestFeedInAdjustmentVisibility:
     value invisible and uneditable on the three sources it also applied to.
     """
 
-    SOURCES = ["fixed", "elpris_dk", "epex_spot", "evcc", "timeseries"]
+    SOURCES = ["fixed", "elpris_dk", "epex_spot", "evcc", "timeseries", "stromligning"]
 
     @pytest.mark.parametrize(
         "key", ["price.feed_in_static_adder", "price.feed_in_multiplier"]

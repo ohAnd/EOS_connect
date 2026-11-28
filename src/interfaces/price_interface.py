@@ -62,6 +62,10 @@ try:  # running from src/ — src/ is on sys.path
     from interfaces.http_fetch import bearer_request_kwargs, retry_request
 except ImportError:  # imported as src.interfaces (tests)
     from .http_fetch import bearer_request_kwargs, retry_request
+try:  # running from src/ — src/ is on sys.path
+    from version import __version__
+except ImportError:  # imported as src.interfaces (tests)
+    from ..version import __version__
 from .forecast_metadata import ForecastMetadataMixin
 from .timeseries_normalizer import (
     TEMPLATE_DOCS_URL,
@@ -242,6 +246,12 @@ AKKUDOKTOR_API_PRICES = "https://api.akkudoktor.net/prices"
 TIBBER_API = "https://api.tibber.com/v1-beta/gql"
 SMARTENERGY_API = "https://apis.smartenergy.at/market/v1/price"
 STROMLIGNING_API_BASE = "https://stromligning.dk/api/prices?lean=true"
+# Strømligning is a free, keyless API; naming the client lets its operator tell
+# EOS Connect apart from generic python-requests traffic.
+STROMLIGNING_HEADERS = {
+    "accept": "application/json",
+    "User-Agent": f"EOS_connect/{__version__}",
+}
 ENERGYFORECAST_API = "https://www.energyforecast.de/api/v1/predictions/next_48_hours"
 
 # Sources that publish a raw exchange price, i.e. energy alone with no grid fee,
@@ -601,6 +611,21 @@ class PriceInterface(ForecastMetadataMixin):
         Returns:
             str: ISO 4217 currency code (e.g. 'EUR', 'DKK').
         """
+        return self.price_currency
+
+    def refresh_price_currency(self):
+        """
+        Re-derive the currency after ``src`` changed at runtime.
+
+        Set once in ``__init__`` otherwise, so a live switch from Strømligning
+        to another source kept reporting DKK (and the other way round) until
+        the next restart. Tibber starts from the default again and corrects it
+        from the account on its next fetch, exactly as at startup.
+
+        Returns:
+            str: The currency now reported.
+        """
+        self.price_currency = self.__determine_price_currency()
         return self.price_currency
 
     def get_forecast_metadata(self):
@@ -1191,8 +1216,6 @@ class PriceInterface(ForecastMetadataMixin):
         if start_time.tzinfo is None and hasattr(self.time_zone, "localize"):
             start_time = self.time_zone.localize(start_time)
 
-        headers = {"accept": "application/json"}
-
         request_url = self._stromligning_url
         to_param = (
             start_time + timedelta(seconds=tgt_duration * self.time_frame_base)
@@ -1202,7 +1225,9 @@ class PriceInterface(ForecastMetadataMixin):
         logger.debug("[PRICE-IF] Requesting prices from STROMLIGNING: %s", request_url)
 
         try:
-            response = requests.get(request_url, headers=headers, timeout=10)
+            response = requests.get(
+                request_url, headers=STROMLIGNING_HEADERS, timeout=10
+            )
             response.raise_for_status()
             data = response.json()
         except requests.exceptions.Timeout:

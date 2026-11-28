@@ -10,6 +10,7 @@ from src.interfaces.price_interface import (
     STROMLIGNING_API_BASE,
     timestamp_key,
 )
+from src.version import __version__
 
 # Accessing protected members is fine in white-box tests.
 # pylint: disable=protected-access
@@ -247,6 +248,58 @@ def test_stromligning_quarter_hour_aggregation(monkeypatch):
     assert price_interface.get_current_prices() == pytest.approx(
         expected_15min_prices, rel=1e-9
     )
+
+
+def test_refresh_price_currency_follows_a_live_source_switch(monkeypatch):
+    """The currency is re-derived from src, not kept from startup."""
+    monkeypatch.setattr(
+        PriceInterface,
+        "_PriceInterface__start_update_service",
+        lambda self: None,
+    )
+    price_interface = PriceInterface(
+        {"source": "stromligning", "token": "radius_c"},
+        time_frame_base=3600,
+        timezone=timezone.utc,
+    )
+    assert price_interface.get_price_currency() == "DKK"
+
+    price_interface.src = "smartenergy_at"
+    assert price_interface.refresh_price_currency() == "EUR"
+    assert price_interface.get_price_currency() == "EUR"
+
+    price_interface.src = "stromligning"
+    price_interface.refresh_price_currency()
+    assert price_interface.get_price_currency() == "DKK"
+
+
+def test_stromligning_request_names_eos_connect(monkeypatch):
+    """The request carries a User-Agent naming EOS Connect and its version."""
+    seen = {}
+
+    def fake_get(url, headers=None, timeout=None):
+        # pylint: disable=unused-argument
+        seen["headers"] = headers
+        return DummyResponse(_build_sample_response())
+
+    monkeypatch.setattr("src.interfaces.price_interface.requests.get", fake_get)
+    monkeypatch.setattr(
+        PriceInterface,
+        "_PriceInterface__start_update_service",
+        lambda self: None,
+    )
+
+    price_interface = PriceInterface(
+        {"source": "stromligning", "token": "radius_c/velkommen_gron_el"},
+        time_frame_base=3600,
+        timezone=timezone.utc,
+    )
+    price_interface.update_prices(
+        4, start_time=datetime(2025, 10, 20, 22, tzinfo=timezone.utc)
+    )
+
+    assert seen["headers"]["User-Agent"] == f"EOS_connect/{__version__}"
+    assert seen["headers"]["accept"] == "application/json"
 
 
 @pytest.mark.parametrize(

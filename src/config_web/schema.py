@@ -1246,7 +1246,14 @@ _ALL_FIELDS: list[FieldDef] = [
         description="Source for feed-in (export) prices",
         help_url="config-price.html#price",
         validation={
-            "choices": ["fixed", "elpris_dk", "epex_spot", "evcc", "timeseries"]
+            "choices": [
+                "fixed",
+                "elpris_dk",
+                "epex_spot",
+                "evcc",
+                "timeseries",
+                "stromligning",
+            ]
         },
         hot_reload=True,
         display_group="Feed-In Price",
@@ -1277,6 +1284,21 @@ _ALL_FIELDS: list[FieldDef] = [
         display_group="Feed-In Price",
     ),
     FieldDef(
+        key="price.feed_in_token",
+        field_type="str",
+        default="",
+        section="price",
+        level="standard",
+        description=(
+            "Stromligning grid supplier ID, optionally followed by a production "
+            "agreement's product ID (supplierId or supplierId/productId)"
+        ),
+        help_url="config-price.html#price",
+        depends_on={"price.feed_in_source": ["stromligning"]},
+        hot_reload=True,
+        display_group="Feed-In Price",
+    ),
+    FieldDef(
         key="price.feed_in_static_adder",
         field_type="float",
         default=0.0,
@@ -1292,6 +1314,7 @@ _ALL_FIELDS: list[FieldDef] = [
                 "epex_spot": "Static adjustment to the EPEX Spot price in ct/kWh (e.g., +3.5 for transport costs)",
                 "evcc": "Static adjustment to the EVCC feed-in rate in ct/kWh",
                 "timeseries": "Static adjustment to the sourced feed-in price in ct/kWh",
+                "stromligning": "Static adjustment to the Stromligning sale price in øre/kWh",
             }
         },
         # Every feed-in source applies (price + adder) * multiplier, so the
@@ -1305,6 +1328,7 @@ _ALL_FIELDS: list[FieldDef] = [
                 "epex_spot",
                 "evcc",
                 "timeseries",
+                "stromligning",
             ]
         },
         hot_reload=True,
@@ -1326,6 +1350,7 @@ _ALL_FIELDS: list[FieldDef] = [
                 "epex_spot": "Multiplier on the EPEX Spot price (1.0 = no change, 1.05 = +5%)",
                 "evcc": "Multiplier on the EVCC feed-in rate (1.0 = no change)",
                 "timeseries": "Multiplier on the sourced feed-in price (1.0 = no change)",
+                "stromligning": "Multiplier on the Stromligning sale price (1.0 = no change)",
             }
         },
         depends_on={
@@ -1335,6 +1360,7 @@ _ALL_FIELDS: list[FieldDef] = [
                 "epex_spot",
                 "evcc",
                 "timeseries",
+                "stromligning",
             ]
         },
         hot_reload=True,
@@ -1355,6 +1381,7 @@ _ALL_FIELDS: list[FieldDef] = [
                 "epex_spot": "Clamp to 0 when market price (EPEX Spot) goes negative",
                 "evcc": "Clamp to 0 when the EVCC feed-in rate goes negative",
                 "timeseries": "Clamp to 0 when the sourced feed-in price goes negative",
+                "stromligning": "Clamp to 0 when the Stromligning sale price goes negative",
             }
         },
         depends_on={
@@ -1364,6 +1391,7 @@ _ALL_FIELDS: list[FieldDef] = [
                 "epex_spot",
                 "evcc",
                 "timeseries",
+                "stromligning",
             ]
         },
         hot_reload=True,

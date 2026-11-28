@@ -4,7 +4,8 @@ This module provides the `FeedInPriceInterface` class for retrieving and process
 feed-in (export) price data from various sources.
 
 Supported sources:
-    - Elpris (Dänemark): Spot-Preise für stromexport (DKK/kWh and EUR/kWh per hour)
+    - Elpris (Dänemark): Spot-Preise für stromexport (served in EUR/kWh)
+    - Strømligning (Denmark): sale price after production tariffs (DKK/kWh)
     - EPEX-Spot (EU/AT): Netto-Börsenpreise via Akkudoktor (in ct/kWh)
     - EVCC: Real-time feed-in tariffs from EVCC charger (in EUR/kWh)
     - Fixed: Statischer Einspeisepreis (in ct/kWh)
@@ -29,7 +30,7 @@ Usage:
     current_feedin = feed_in_interface.get_current_feedin_prices()
 """
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 import logging
 import threading
 import requests
@@ -48,7 +49,7 @@ try:  # running from src/ — src/ is on sys.path
 except ImportError:  # imported as src.interfaces (tests)
     from .http_fetch import bearer_request_kwargs
 from .forecast_metadata import ForecastMetadataMixin
-from .price_interface import fill_price_gaps
+from .price_interface import STROMLIGNING_HEADERS, fill_price_gaps
 from .timeseries_normalizer import (
     PRICE_UNIT_TO_EUR_PER_WH,
     TEMPLATE_DOCS_URL,
@@ -65,6 +66,24 @@ logger.info("[FEEDIN-IF] loading module")
 
 ELPRIS_API_BASE = "https://www.elprisenligenu.dk/api/v1/prices"
 AKKUDOKTOR_API_PRICES = "https://api.akkudoktor.net/prices"
+STROMLIGNING_PRODUCTION_API = "https://stromligning.dk/api/prices/production"
+STROMLIGNING_RESOLUTION_MINUTES = {"15m": 15, "30m": 30, "1h": 60, "60m": 60}
+
+# Currency each source serves, where the source itself decides it. Sources the
+# user configures the unit for (fixed, evcc, timeseries) are left out on purpose:
+# guessing there would warn about setups that are correct.
+FEED_IN_SOURCE_CURRENCY = {
+    "elpris_dk": "EUR",
+    "epex_spot": "EUR",
+    "stromligning": "DKK",
+}
+# The same for grid price sources with a fixed currency. Tibber reports its
+# account currency at runtime; evcc, timeseries and fixed_24h carry the user's
+# unit, and PriceInterface only defaults them to EUR.
+GRID_SOURCE_CURRENCY = {
+    "smartenergy_at": "EUR",
+    "stromligning": "DKK",
+}
 
 # Only used when a record carries DKK but no EXR of its own. Every record the
 # API actually serves carries both EUR_per_kWh and EXR, so this is a last
@@ -85,6 +104,11 @@ def _as_number(value):
     return float(value)
 
 
+def _utc_stamp(moment):
+    """An aware datetime as the UTC ISO stamp Strømligning takes for from/to."""
+    return moment.astimezone(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 class FeedInPriceInterface(ForecastMetadataMixin):
     """
     The FeedInPriceInterface class manages electricity feed-in (export) price data retrieval
@@ -94,13 +118,15 @@ class FeedInPriceInterface(ForecastMetadataMixin):
 
     Attributes:
         source (str): Source of the feed-in price data
-            ('elpris_dk', 'epex_spot', 'evcc', 'timeseries', 'fixed')
+            ('elpris_dk', 'epex_spot', 'evcc', 'timeseries', 'stromligning', 'fixed')
         zone (str): Price zone for Elpris (DK1 or DK2)
-        static_adder_ct_kwh (float): Static adjustment in ct/kWh (e.g., 3.5 for transport costs)
+        static_adder_ct_kwh (float): Static adjustment in the minor unit per kWh —
+            ct/kWh, or øre/kWh for stromligning (e.g., 3.5 for transport costs)
         multiplier (float): Relative multiplier (1.0 = no change, 1.05 = +5%)
         time_frame_base (int): Time frame in seconds (3600 = hourly, 900 = 15-min slots)
         time_zone (pytz.timezone): Timezone for date operations
-        current_feedin_prices (list): Current feed-in prices in EUR/Wh
+        current_feedin_prices (list): Current feed-in prices per Wh, in the
+            source's currency (see get_price_currency)
         default_prices (list): Default fallback prices
         last_successful_prices (list): Last successfully fetched prices for fallback
         consecutive_failures (int): Counter for consecutive API failures
@@ -112,8 +138,10 @@ class FeedInPriceInterface(ForecastMetadataMixin):
 
         Args:
             config (dict): Configuration dictionary with keys:
-                - source: 'elpris_dk', 'epex_spot', 'fixed', or 'evcc'
+                - source: 'elpris_dk', 'epex_spot', 'fixed', 'evcc', 'timeseries'
+                  or 'stromligning'
                 - zone: 'DK1' or 'DK2' (for elpris_dk only)
+                - token: 'supplierId' or 'supplierId/productId' (for stromligning only)
                 - static_adder_ct_kwh: Static adjustment in ct/kWh (standard unit)
                 - multiplier: Relative multiplier (default 1.0)
                 - fixed_price_ct_kwh: Fixed price in ct/kWh (for 'fixed' source)
@@ -162,6 +190,9 @@ class FeedInPriceInterface(ForecastMetadataMixin):
         self.data_token = str(config.get("data_token", "") or "").strip()
         self.value_unit = str(config.get("value_unit", "") or "EUR/kWh").strip()
 
+        # Strømligning: grid supplier, optionally followed by a production agreement.
+        self.token = str(config.get("token", "") or "").strip()
+
         self._init_forecast_metadata()
 
         self.time_frame_base = time_frame_base
@@ -172,6 +203,9 @@ class FeedInPriceInterface(ForecastMetadataMixin):
             # Already a pytz timezone object
             self.time_zone = timezone
         self.current_feedin_prices = []
+        # (grid, feed-in) currency pair last warned about, so a mismatch is
+        # logged once per configuration and not on every optimization cycle.
+        self._warned_currency_pair = None
 
         # Default fallback prices (0.5 ct/kWh = 0.000005 EUR/Wh)
         self.default_prices = [0.000005] * 48
@@ -205,7 +239,14 @@ class FeedInPriceInterface(ForecastMetadataMixin):
 
     def _validate_config(self):
         """Validate configuration parameters."""
-        valid_sources = ["fixed", "elpris_dk", "epex_spot", "evcc", "timeseries"]
+        valid_sources = [
+            "fixed",
+            "elpris_dk",
+            "epex_spot",
+            "evcc",
+            "timeseries",
+            "stromligning",
+        ]
         if self.source not in valid_sources:
             logger.error(
                 "[FEEDIN-IF] Invalid source: %s. Defaulting to 'fixed'.", self.source
@@ -359,9 +400,61 @@ class FeedInPriceInterface(ForecastMetadataMixin):
         Get current feed-in prices.
 
         Returns:
-            list: Feed-in prices in EUR/Wh
+            list: Feed-in prices per Wh in the source's currency — EUR/Wh,
+            or DKK/Wh for stromligning (see get_price_currency)
         """
         return self.current_feedin_prices
+
+    def get_price_currency(self):
+        """
+        The currency the configured source serves its prices in.
+
+        Returns:
+            str or None: ISO 4217 code, or None where the source does not say
+            (fixed, evcc and timeseries carry whatever unit the user set up).
+        """
+        return FEED_IN_SOURCE_CURRENCY.get(self.source)
+
+    def check_currency_match(self, grid_source, reported_currency):
+        """
+        Warn when feed-in and grid prices arrive in different currencies.
+
+        The optimizer compares both arrays 1:1, so DKK feed-in prices next to
+        EUR grid prices are off by the exchange rate (about 7.5) without any
+        error. Logged once per currency pair; a matching or unknown pair
+        clears it, so switching back and forth warns again.
+
+        Args:
+            grid_source (str): The grid price source (``price.source``).
+            reported_currency (str): What ``PriceInterface.get_price_currency()``
+                reports. Trusted for Tibber only, which reads it from the
+                account; for the other sources it is a default, not a fact.
+
+        Returns:
+            bool: False only when both currencies are known and differ.
+        """
+        if grid_source == "tibber":
+            grid_currency = reported_currency
+        else:
+            grid_currency = GRID_SOURCE_CURRENCY.get(grid_source)
+        feed_in_currency = self.get_price_currency()
+        known = grid_currency and feed_in_currency
+        if not known or grid_currency == feed_in_currency:
+            self._warned_currency_pair = None
+            return True
+
+        pair = (grid_currency, feed_in_currency)
+        if pair != self._warned_currency_pair:
+            self._warned_currency_pair = pair
+            logger.warning(
+                "[FEEDIN-IF] Feed-in prices from '%s' are in %s, grid prices in %s "
+                "— the optimizer compares them 1:1. Pick sources in the same "
+                "currency | Config: #price | ACTION REQUIRED",
+                self.source,
+                feed_in_currency,
+                grid_currency,
+            )
+        return False
 
     def _retrieve_prices(self, tgt_duration, start_time):
         """
@@ -372,7 +465,8 @@ class FeedInPriceInterface(ForecastMetadataMixin):
             start_time (datetime): Start time for retrieval
 
         Returns:
-            list: Prices in EUR/Wh or empty list on error
+            list: Prices per Wh in the source's currency (EUR/Wh, DKK/Wh for
+            stromligning) or empty list on error
         """
         if self.source == "elpris_dk":
             return self._apply_adjustments(
@@ -391,6 +485,10 @@ class FeedInPriceInterface(ForecastMetadataMixin):
         elif self.source == "timeseries":
             return self._apply_adjustments(
                 self._fetch_timeseries_prices(tgt_duration, start_time)
+            )
+        elif self.source == "stromligning":
+            return self._apply_adjustments(
+                self._fetch_stromligning_prices(tgt_duration, start_time)
             )
         elif self.source == "fixed":
             return self._fetch_fixed_price(tgt_duration, start_time)
@@ -649,6 +747,10 @@ class FeedInPriceInterface(ForecastMetadataMixin):
         the multiplier is a plain factor here (1.0 = unchanged), unlike the
         grid-price side's (1 + relative) form; existing configs rely on it.
         negative_price_switch then clamps below zero to 0.
+
+        The adder is in the minor unit of the prices' currency — ct/kWh for
+        EUR, øre/kWh for DKK — and /100000 turns either into the per-Wh major
+        unit the prices are in.
         """
         if not prices:
             return prices
@@ -902,6 +1004,180 @@ class FeedInPriceInterface(ForecastMetadataMixin):
         except (KeyError, ValueError) as e:
             logger.error("[FEEDIN-IF] EVCC feed-in API response parsing failed: %s", e)
             return []
+
+    def _fetch_stromligning_prices(self, tgt_duration, start_time):
+        """
+        Fetch feed-in prices from Strømligning's production price API.
+
+        API: https://stromligning.dk/api/docs/ (``/api/prices/production``) —
+        the spot price excluding VAT, less Energinet's and the grid supplier's
+        production tariffs (with their VAT), i.e. what a Danish household is
+        paid per exported kWh. With a production agreement's productId the
+        electricity company's own deduction is subtracted as well. Published
+        prices come per quarter hour; ``forecast=true`` continues the series
+        with Strømligning's hourly price forecast.
+
+        The values are DKK/kWh and are passed on as DKK/Wh, exactly as the
+        grid-price Stromligning source does, so both sides share one currency.
+
+        Returns:
+            list: Prices per slot, or [] on error (the caller's fallback chain
+            then serves the last good data).
+        """
+        parts = [part.strip() for part in self.token.split("/")]
+        if not parts[0] or len(parts) > 2 or "" in parts:
+            logger.error(
+                "[FEEDIN-IF] Stromligning feed-in needs price.feed_in_token as "
+                "'supplierId' or 'supplierId/productId' (got %r) | Config: #price "
+                "| ACTION REQUIRED",
+                self.token,
+            )
+            return []
+
+        horizon_end = start_time + timedelta(
+            seconds=tgt_duration * self.time_frame_base
+        )
+        params = {
+            "supplierId": parts[0],
+            "from": _utc_stamp(start_time),
+            "to": _utc_stamp(horizon_end),
+            "forecast": "true",
+            "lean": "true",
+        }
+        if len(parts) == 2:
+            params["productId"] = parts[1]
+
+        try:
+            response = requests.get(
+                STROMLIGNING_PRODUCTION_API,
+                params=params,
+                headers=STROMLIGNING_HEADERS,
+                timeout=10,
+            )
+            response.raise_for_status()
+            data = response.json()
+        except requests.HTTPError as e:
+            # The API names the problem in plain text ("Supplier not found",
+            # "Company not found for product id: …"); the status line alone
+            # does not tell the user which part of the token is wrong.
+            status, detail = None, ""
+            if e.response is not None:
+                status = e.response.status_code
+                detail = (e.response.text or "").strip()[:200]
+            if status is not None and 400 <= status < 500:
+                logger.error(
+                    "[FEEDIN-IF] Stromligning rejected price.feed_in_token %r: "
+                    "HTTP %s %s | Config: #price | ACTION REQUIRED",
+                    self.token,
+                    status,
+                    detail,
+                )
+            else:
+                logger.error(
+                    "[FEEDIN-IF] Stromligning API request failed: HTTP %s %s",
+                    status,
+                    detail,
+                )
+            return []
+        except requests.RequestException as e:
+            logger.error("[FEEDIN-IF] Stromligning API request failed: %s", e)
+            return []
+        except ValueError as e:
+            logger.error("[FEEDIN-IF] Stromligning response is not valid JSON: %s", e)
+            return []
+
+        if not isinstance(data, list):
+            logger.error(
+                "[FEEDIN-IF] Stromligning response is %s, expected a list of prices",
+                type(data).__name__,
+            )
+            return []
+
+        entries = []
+        forecast_from = None
+        for entry in data:
+            try:
+                start = datetime.fromisoformat(entry["date"].replace("Z", "+00:00"))
+                minutes = STROMLIGNING_RESOLUTION_MINUTES[entry["resolution"]]
+                value = float(entry["price"]) / 1000.0
+            except (KeyError, TypeError, ValueError, AttributeError):
+                logger.debug(
+                    "[FEEDIN-IF] Skipping malformed Stromligning entry: %s", entry
+                )
+                continue
+            entries.append(
+                {
+                    "start": start,
+                    "end": start + timedelta(minutes=minutes),
+                    "value": value,
+                }
+            )
+            if entry.get("forecast") and (
+                forecast_from is None or start < forecast_from
+            ):
+                forecast_from = start
+
+        slot_count = tgt_duration
+        try:
+            placement = place_on_grid(
+                entries, start_time, slot_count, self.time_frame_base, KIND_INTENSIVE
+            )
+        except TimeseriesGridError as exc:
+            logger.error("[FEEDIN-IF] Invalid Stromligning prices: %s", exc)
+            return []
+
+        values, _leading, gap_start = fill_price_gaps(
+            placement.values, placement.coverage, slots_per_day=slot_count // 2
+        )
+        if not values:
+            logger.warning(
+                "[FEEDIN-IF] None of %d Stromligning prices fell into the %d-slot "
+                "window starting %s — keeping the last good prices",
+                placement.source_count,
+                slot_count,
+                start_time.isoformat(),
+            )
+            return []
+
+        self._set_stromligning_forecast_metadata(
+            forecast_from, start_time, slot_count, gap_start
+        )
+        return [round(value, 9) for value in values]
+
+    def _set_stromligning_forecast_metadata(
+        self, forecast_from, start_time, slot_count, gap_start
+    ):
+        """
+        Mark where Strømligning's own forecast starts in the served array.
+
+        Its entries carry ``forecast: true`` from the end of the published
+        day-ahead prices on; a gap the fill policy had to close comes after
+        that, if at all, so the earlier of the two is what the chart hatches.
+        """
+        forecast_index = None
+        if forecast_from is not None:
+            offset = (
+                forecast_from.timestamp() - start_time.timestamp()
+            ) / self.time_frame_base
+            if offset < slot_count:
+                forecast_index = max(0, int(offset))
+
+        if forecast_index is not None and (
+            gap_start is None or forecast_index <= gap_start
+        ):
+            self._set_forecast_metadata(
+                start_index=forecast_index,
+                forecast_type="smart_forecast",
+                source="stromligning.dk",
+            )
+        elif gap_start is not None:
+            self._set_forecast_metadata(
+                start_index=gap_start, forecast_type="simple_repetition", source=None
+            )
+        else:
+            self._set_forecast_metadata(
+                start_index=None, forecast_type="all_real", source=None
+            )
 
     def _fetch_fixed_price(self, tgt_duration, start_time):
         """

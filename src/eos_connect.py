@@ -548,6 +548,8 @@ feed_in_config = {
     "data_path": price_config.get("feed_in_data_path", "attributes.data"),
     "data_token": price_config.get("feed_in_data_token", ""),
     "value_unit": price_config.get("feed_in_value_unit", "EUR/kWh"),
+    # Stromligning: 'supplierId' or 'supplierId/productId' (production agreement)
+    "token": price_config.get("feed_in_token", ""),
 }
 
 feed_in_price_interface = interface_factory.create_feed_in_price_interface(
@@ -1149,6 +1151,9 @@ def create_optimize_request():
         # constant PriceInterface value
         einspeiseverguetung_euro_pro_wh = (
             feed_in_price_interface.get_current_feedin_prices()
+        )
+        feed_in_price_interface.check_currency_match(
+            price_interface.src, price_interface.get_price_currency()
         )
         slots_per_hour = 3600 // time_frame_base
         gesamtlast = load_interface.get_load_profile(EOS_TGT_DURATION * slots_per_hour)

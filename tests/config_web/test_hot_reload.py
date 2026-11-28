@@ -269,6 +269,42 @@ class TestHotReloadPrice:
         price_interface.update_prices.assert_called_once()
         price_interface.drop_fallback_cache.assert_called_once()
 
+    def test_price_source_change_refreshes_the_currency(self, price_interface):
+        """A source switch re-derives the currency; it was set once at startup."""
+        price_interface.src = "stromligning"
+        price_interface.time_zone = ZoneInfo("UTC")
+        price_interface.time_frame_base = 3600
+        price_interface.update_prices = MagicMock()
+
+        adapter = HotReloadAdapter(
+            price_interface=price_interface,
+            config_provider=MagicMock(
+                return_value={"price": {"source": "smartenergy_at"}}
+            ),
+        )
+
+        adapter.on_config_changed("price.source", "stromligning", "smartenergy_at")
+
+        price_interface.refresh_price_currency.assert_called_once()
+
+    def test_a_non_source_price_change_keeps_the_currency(self, price_interface):
+        """Editing a data field leaves the currency alone."""
+        price_interface.src = "timeseries"
+        price_interface.time_zone = ZoneInfo("UTC")
+        price_interface.time_frame_base = 3600
+        price_interface.update_prices = MagicMock()
+
+        adapter = HotReloadAdapter(
+            price_interface=price_interface,
+            config_provider=MagicMock(
+                return_value={"price": {"source": "timeseries", "data_url": "http://x"}}
+            ),
+        )
+
+        adapter.on_config_changed("price.data_url", "http://old", "http://x")
+
+        price_interface.refresh_price_currency.assert_not_called()
+
     def test_a_non_source_price_change_keeps_the_cache(self, price_interface):
         """Editing a data field is not a source change — the cache stays valid."""
         price_interface.src = "timeseries"
@@ -841,6 +877,35 @@ class TestHotReloadFeedInSource:
 
         assert feed_in_price_interface.source == "evcc"
         assert "price.feed_in_source" in adapter.last_applied
+        feed_in_price_interface.update_prices.assert_called_once()
+
+    def test_feed_in_token_change(self, feed_in_price_interface):
+        """Changing price.feed_in_token should update the Stromligning IDs and refetch."""
+        feed_in_price_interface.source = "stromligning"
+        feed_in_price_interface.token = "radius_c"
+        feed_in_price_interface.time_zone = ZoneInfo("UTC")
+        feed_in_price_interface.time_frame_base = 3600
+        feed_in_price_interface.update_prices = MagicMock()
+
+        config_provider = MagicMock(
+            return_value={
+                "price": {
+                    "feed_in_source": "stromligning",
+                    "feed_in_token": " radius_c/nrgi_produktion ",
+                }
+            }
+        )
+
+        adapter = HotReloadAdapter(
+            feed_in_price_interface=feed_in_price_interface,
+            config_provider=config_provider,
+        )
+        adapter.on_config_changed(
+            "price.feed_in_token", "radius_c", " radius_c/nrgi_produktion "
+        )
+
+        assert feed_in_price_interface.token == "radius_c/nrgi_produktion"
+        assert "price.feed_in_token" in adapter.last_applied
         feed_in_price_interface.update_prices.assert_called_once()
 
     def test_no_feed_in_interface_no_crash(self):
