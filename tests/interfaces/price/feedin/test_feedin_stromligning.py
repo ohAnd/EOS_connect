@@ -239,3 +239,73 @@ class TestStromligningFeedInErrors:
         )
 
         assert iface._fetch_stromligning_prices(48, ANCHOR) == []
+
+
+class TestFeedInCurrencyCheck:
+    """DKK feed-in next to EUR grid prices is warned about, once."""
+
+    def test_stromligning_serves_dkk(self, monkeypatch):
+        """The source's currency is known, like the grid-price Stromligning one."""
+        assert _interface(monkeypatch, []).get_price_currency() == "DKK"
+
+    def test_same_currency_is_quiet(self, monkeypatch, caplog):
+        """Strømligning on both sides: nothing to warn about."""
+        iface = _interface(monkeypatch, [])
+
+        with caplog.at_level(logging.WARNING):
+            assert iface.check_currency_match("stromligning", "DKK") is True
+
+        assert "compares them 1:1" not in caplog.text
+
+    def test_a_mismatch_warns_once_per_pair(self, monkeypatch, caplog):
+        """EUR grid prices: one warning, not one per optimization cycle."""
+        iface = _interface(monkeypatch, [])
+
+        with caplog.at_level(logging.WARNING):
+            assert iface.check_currency_match("smartenergy_at", "EUR") is False
+            assert iface.check_currency_match("smartenergy_at", "EUR") is False
+
+        warnings = [r for r in caplog.records if "compares them 1:1" in r.message]
+        assert len(warnings) == 1
+        assert "DKK" in warnings[0].message and "EUR" in warnings[0].message
+
+    def test_fixing_the_config_rearms_the_warning(self, monkeypatch, caplog):
+        """A match in between clears it, so the next mismatch is reported."""
+        iface = _interface(monkeypatch, [])
+
+        with caplog.at_level(logging.WARNING):
+            iface.check_currency_match("smartenergy_at", "EUR")
+            iface.check_currency_match("stromligning", "DKK")
+            iface.check_currency_match("smartenergy_at", "EUR")
+
+        warnings = [r for r in caplog.records if "compares them 1:1" in r.message]
+        assert len(warnings) == 2
+
+    @pytest.mark.parametrize("currency,matches", [("DKK", True), ("EUR", False)])
+    def test_tibber_is_judged_by_its_account_currency(
+        self, monkeypatch, currency, matches
+    ):
+        """Tibber reports the account currency; a Danish account is DKK."""
+        iface = _interface(monkeypatch, [])
+
+        assert iface.check_currency_match("tibber", currency) is matches
+
+    @pytest.mark.parametrize("grid_source", ["evcc", "timeseries", "fixed_24h"])
+    def test_grid_sources_with_user_units_are_not_judged(
+        self, monkeypatch, caplog, grid_source
+    ):
+        """PriceInterface only defaults these to EUR; a DKK setup is not wrong."""
+        iface = _interface(monkeypatch, [])
+
+        with caplog.at_level(logging.WARNING):
+            assert iface.check_currency_match(grid_source, "EUR") is True
+
+        assert "compares them 1:1" not in caplog.text
+
+    @pytest.mark.parametrize("source", ["fixed", "evcc", "timeseries"])
+    def test_feed_in_sources_with_user_units_are_not_judged(self, monkeypatch, source):
+        """Feed-in sources whose unit the user sets have no currency to compare."""
+        iface = _interface(monkeypatch, [], source=source)
+
+        assert iface.get_price_currency() is None
+        assert iface.check_currency_match("stromligning", "DKK") is True

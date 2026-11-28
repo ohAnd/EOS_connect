@@ -69,6 +69,22 @@ AKKUDOKTOR_API_PRICES = "https://api.akkudoktor.net/prices"
 STROMLIGNING_PRODUCTION_API = "https://stromligning.dk/api/prices/production"
 STROMLIGNING_RESOLUTION_MINUTES = {"15m": 15, "30m": 30, "1h": 60, "60m": 60}
 
+# Currency each source serves, where the source itself decides it. Sources the
+# user configures the unit for (fixed, evcc, timeseries) are left out on purpose:
+# guessing there would warn about setups that are correct.
+FEED_IN_SOURCE_CURRENCY = {
+    "elpris_dk": "EUR",
+    "epex_spot": "EUR",
+    "stromligning": "DKK",
+}
+# The same for grid price sources with a fixed currency. Tibber reports its
+# account currency at runtime; evcc, timeseries and fixed_24h carry the user's
+# unit, and PriceInterface only defaults them to EUR.
+GRID_SOURCE_CURRENCY = {
+    "smartenergy_at": "EUR",
+    "stromligning": "DKK",
+}
+
 # Only used when a record carries DKK but no EXR of its own. Every record the
 # API actually serves carries both EUR_per_kWh and EXR, so this is a last
 # resort, not the conversion path - a rate frozen into the source silently
@@ -185,6 +201,9 @@ class FeedInPriceInterface(ForecastMetadataMixin):
             # Already a pytz timezone object
             self.time_zone = timezone
         self.current_feedin_prices = []
+        # (grid, feed-in) currency pair last warned about, so a mismatch is
+        # logged once per configuration and not on every optimization cycle.
+        self._warned_currency_pair = None
 
         # Default fallback prices (0.5 ct/kWh = 0.000005 EUR/Wh)
         self.default_prices = [0.000005] * 48
@@ -382,6 +401,57 @@ class FeedInPriceInterface(ForecastMetadataMixin):
             list: Feed-in prices in EUR/Wh
         """
         return self.current_feedin_prices
+
+    def get_price_currency(self):
+        """
+        The currency the configured source serves its prices in.
+
+        Returns:
+            str or None: ISO 4217 code, or None where the source does not say
+            (fixed, evcc and timeseries carry whatever unit the user set up).
+        """
+        return FEED_IN_SOURCE_CURRENCY.get(self.source)
+
+    def check_currency_match(self, grid_source, reported_currency):
+        """
+        Warn when feed-in and grid prices arrive in different currencies.
+
+        The optimizer compares both arrays 1:1, so DKK feed-in prices next to
+        EUR grid prices are off by the exchange rate (about 7.5) without any
+        error. Logged once per currency pair; a matching or unknown pair
+        clears it, so switching back and forth warns again.
+
+        Args:
+            grid_source (str): The grid price source (``price.source``).
+            reported_currency (str): What ``PriceInterface.get_price_currency()``
+                reports. Trusted for Tibber only, which reads it from the
+                account; for the other sources it is a default, not a fact.
+
+        Returns:
+            bool: False only when both currencies are known and differ.
+        """
+        if grid_source == "tibber":
+            grid_currency = reported_currency
+        else:
+            grid_currency = GRID_SOURCE_CURRENCY.get(grid_source)
+        feed_in_currency = self.get_price_currency()
+        known = grid_currency and feed_in_currency
+        if not known or grid_currency == feed_in_currency:
+            self._warned_currency_pair = None
+            return True
+
+        pair = (grid_currency, feed_in_currency)
+        if pair != self._warned_currency_pair:
+            self._warned_currency_pair = pair
+            logger.warning(
+                "[FEEDIN-IF] Feed-in prices from '%s' are in %s, grid prices in %s "
+                "— the optimizer compares them 1:1. Pick sources in the same "
+                "currency | Config: #price | ACTION REQUIRED",
+                self.source,
+                feed_in_currency,
+                grid_currency,
+            )
+        return False
 
     def _retrieve_prices(self, tgt_duration, start_time):
         """

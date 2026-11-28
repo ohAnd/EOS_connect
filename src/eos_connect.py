@@ -1152,6 +1152,9 @@ def create_optimize_request():
         einspeiseverguetung_euro_pro_wh = (
             feed_in_price_interface.get_current_feedin_prices()
         )
+        feed_in_price_interface.check_currency_match(
+            price_interface.src, price_interface.get_price_currency()
+        )
         slots_per_hour = 3600 // time_frame_base
         gesamtlast = load_interface.get_load_profile(EOS_TGT_DURATION * slots_per_hour)
         # Managed loads join the household profile here, and nowhere else. Applied
