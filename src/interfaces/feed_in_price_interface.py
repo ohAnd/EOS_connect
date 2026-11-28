@@ -978,6 +978,29 @@ class FeedInPriceInterface(ForecastMetadataMixin):
             )
             response.raise_for_status()
             data = response.json()
+        except requests.HTTPError as e:
+            # The API names the problem in plain text ("Supplier not found",
+            # "Company not found for product id: …"); the status line alone
+            # does not tell the user which part of the token is wrong.
+            status, detail = None, ""
+            if e.response is not None:
+                status = e.response.status_code
+                detail = (e.response.text or "").strip()[:200]
+            if status is not None and 400 <= status < 500:
+                logger.error(
+                    "[FEEDIN-IF] Stromligning rejected price.feed_in_token %r: "
+                    "HTTP %s %s | Config: #price | ACTION REQUIRED",
+                    self.token,
+                    status,
+                    detail,
+                )
+            else:
+                logger.error(
+                    "[FEEDIN-IF] Stromligning API request failed: HTTP %s %s",
+                    status,
+                    detail,
+                )
+            return []
         except requests.RequestException as e:
             logger.error("[FEEDIN-IF] Stromligning API request failed: %s", e)
             return []

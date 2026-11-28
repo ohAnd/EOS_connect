@@ -10,9 +10,11 @@ on in the same unit the grid-price Stromligning source uses (DKK/Wh).
 """
 
 from datetime import datetime, timedelta, timezone
+import logging
 from unittest.mock import Mock
 
 import pytest
+import requests
 
 from src.interfaces.feed_in_price_interface import (
     STROMLIGNING_PRODUCTION_API,
@@ -175,5 +177,65 @@ class TestStromligningFeedInSource:
     def test_a_non_list_response_fetches_nothing(self, monkeypatch):
         """An error object from the API yields no prices."""
         iface = _interface(monkeypatch, {"error": "Invalid supplier"})
+
+        assert iface._fetch_stromligning_prices(48, ANCHOR) == []
+
+
+def _http_error_get(status, text):
+    """A requests.get stand-in whose response fails raise_for_status."""
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        # pylint: disable=unused-argument
+        response = requests.Response()
+        response.status_code = status
+        response._content = text.encode()  # pylint: disable=protected-access
+        response.url = url
+        return response
+
+    return fake_get
+
+
+class TestStromligningFeedInErrors:
+    """What the user reads in the log when a request fails."""
+
+    def test_a_rejected_token_logs_the_api_reason(self, monkeypatch, caplog):
+        """A 4xx names the token and the API's own reason, as a config error."""
+        iface = _interface(monkeypatch, [], token="nope_x")
+        monkeypatch.setattr(
+            "src.interfaces.feed_in_price_interface.requests.get",
+            _http_error_get(400, "Supplier not found"),
+        )
+
+        with caplog.at_level(logging.ERROR):
+            assert iface._fetch_stromligning_prices(48, ANCHOR) == []
+
+        assert "Supplier not found" in caplog.text
+        assert "'nope_x'" in caplog.text
+        assert "ACTION REQUIRED" in caplog.text
+
+    def test_a_server_error_is_not_blamed_on_the_token(self, monkeypatch, caplog):
+        """A 5xx is logged with its status but not as a config problem."""
+        iface = _interface(monkeypatch, [])
+        monkeypatch.setattr(
+            "src.interfaces.feed_in_price_interface.requests.get",
+            _http_error_get(503, "Service Unavailable"),
+        )
+
+        with caplog.at_level(logging.ERROR):
+            assert iface._fetch_stromligning_prices(48, ANCHOR) == []
+
+        assert "HTTP 503" in caplog.text
+        assert "ACTION REQUIRED" not in caplog.text
+
+    def test_a_connection_error_fetches_nothing(self, monkeypatch):
+        """No connection, no prices: the caller's fallback chain takes over."""
+        iface = _interface(monkeypatch, [])
+
+        def unreachable(*args, **kwargs):
+            raise requests.ConnectionError("unreachable")
+
+        monkeypatch.setattr(
+            "src.interfaces.feed_in_price_interface.requests.get", unreachable
+        )
 
         assert iface._fetch_stromligning_prices(48, ANCHOR) == []
