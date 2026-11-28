@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import logging
 import struct
+import threading
+import time
 import pytest
 
 import src.interfaces.inverters.victron as victron_mod
@@ -431,3 +433,323 @@ class TestVictronAvoidDischargeExternalControl:
         assert ka["targets"][Reg.VEBUS_Hub4_L1_AcPowerSetpoint_37] == 0
         assert ka["targets"][Reg.VEBUS_Hub4_L2_AcPowerSetpoint_40] == 0
         assert ka["targets"][Reg.VEBUS_Hub4_L3_AcPowerSetpoint_41] == 0
+
+
+# =========================================================================
+# Avoid discharge via ESS minimum SoC (issue #344)
+# =========================================================================
+
+ADDR_SOC = REGISTERS[Reg.SYSTEM_Dc_Battery_Soc].address  # 843
+ADDR_BL_STATE = REGISTERS[Reg.SETTINGS_Settings_CGwacs_BatteryLife_State].address
+ADDR_MIN_SOC = REGISTERS[
+    Reg.SETTINGS_Settings_CGwacs_BatteryLife_MinimumSocLimit
+].address  # 2901
+ADDR_HUB4MODE = REGISTERS[Reg.SETTINGS_Settings_Cgwacs_Hub4Mode].address  # 2902
+
+
+def _real_sleep(seconds: float) -> None:
+    """Sleep for real - the min_soc fixture patches time.sleep to a no-op."""
+    threading.Event().wait(seconds)
+
+
+class StatefulModbusClient(DummyModbusTcpClient):
+    """Modbus fake that remembers written registers, so readback works."""
+
+    def __init__(self, host, port=502):
+        """Start from a GX device in normal ESS with a 10 % minimum SoC."""
+        super().__init__(host, port)
+        self.store: dict[int, int] = {
+            ADDR_SOC: 62,
+            ADDR_BL_STATE: 10,
+            ADDR_MIN_SOC: 100,  # raw: 10.0 %
+            ADDR_HUB4MODE: 1,
+        }
+        self.writes: list[tuple[int, int]] = []
+
+    def read_holding_registers(self, address, count, device_id=None, unit=None):
+        """Return the stored word for the address (0 if never set)."""
+        return DummyResponse([self.store.get(int(address), 0)] * int(count))
+
+    def write_register(self, address, value, device_id=None, unit=None):
+        """Store the word and log the write."""
+        self.store[int(address)] = int(value)
+        self.writes.append((int(address), int(value)))
+        return True
+
+
+@pytest.fixture
+def make_min_soc_victron(monkeypatch):
+    """Factory for a VictronInverter on the stateful fake, sleeps disabled."""
+    monkeypatch.setattr(
+        victron_mod, "ModbusTcpClient", StatefulModbusClient, raising=True
+    )
+    monkeypatch.setattr(victron_mod.time, "sleep", lambda _s: None)
+    victron_mod.logger.setLevel(logging.INFO)
+
+    made = []
+
+    def _make(**extra):
+        config = {
+            "address": "192.168.1.50",
+            "type": "victron",
+            "victron_avoid_discharge_method": "min_soc",
+            "battery_min_soc_percentage": 15,
+        }
+        config.update(extra)
+        inv = VictronInverter(config)
+        made.append(inv)
+        return inv
+
+    yield _make
+
+    # A hold leaves a refresh thread running; a test that never allows discharge
+    # again would hand it to the next one.
+    for inv in made:
+        inv._stop_min_soc_refresh()  # pylint: disable=protected-access
+
+
+class TestVictronAvoidDischargeMinSoc:
+    """Avoid discharge via the ESS minimum SoC instead of a 0 W setpoint."""
+
+    def test_default_method_is_external_control(self, victron_instance):
+        """Without the option, the tested 0 W external-control path stays."""
+        assert victron_instance.avoid_discharge_method == "external_control"
+
+    def test_unknown_method_falls_back_to_external_control(
+        self, make_min_soc_victron, caplog
+    ):
+        """A typo must not silently enable an untested path."""
+        with caplog.at_level(logging.WARNING):
+            inv = make_min_soc_victron(victron_avoid_discharge_method="minsoc")
+        assert inv.avoid_discharge_method == "external_control"
+        assert "Unknown victron_avoid_discharge_method" in caplog.text
+
+    def test_avoid_discharge_raises_min_soc_to_current_soc(
+        self, make_min_soc_victron, monkeypatch
+    ):
+        """SoC 62 % -> reg 2901 raw 620; ESS mode untouched, no keepalive."""
+        inv = make_min_soc_victron()
+        client = inv.client
+        keepalive_calls = []
+        monkeypatch.setattr(
+            inv, "start_vebus_keepalive", lambda *a, **k: keepalive_calls.append(a)
+        )
+
+        inv.set_mode_avoid_discharge()
+
+        assert client.store[ADDR_MIN_SOC] == 620
+        assert client.store[ADDR_HUB4MODE] == 1
+        assert ADDR_HUB4MODE not in [addr for addr, _ in client.writes]
+        assert not keepalive_calls
+        assert inv._min_soc_override_active  # pylint: disable=protected-access
+
+    def test_min_soc_never_below_restore_target(self, make_min_soc_victron):
+        """At a SoC under the battery minimum, the minimum itself is held."""
+        inv = make_min_soc_victron()
+        inv.client.store[ADDR_SOC] = 8
+
+        inv.set_mode_avoid_discharge()
+
+        assert inv.client.store[ADDR_MIN_SOC] == 150
+
+    def test_allow_discharge_restores_battery_min_soc(self, make_min_soc_victron):
+        """Discharge allowed puts reg 2901 back to battery.min_soc_percentage."""
+        inv = make_min_soc_victron()
+        inv.set_mode_avoid_discharge()
+
+        inv.set_mode_allow_discharge()
+
+        assert inv.client.store[ADDR_MIN_SOC] == 150
+        assert not inv._min_soc_override_active  # pylint: disable=protected-access
+
+    def test_allow_discharge_after_restart_resets_raised_min_soc(
+        self, make_min_soc_victron
+    ):
+        """A raised minimum left over from before a restart is reset, too."""
+        inv = make_min_soc_victron()
+        inv.client.store[ADDR_MIN_SOC] = 630  # override survived a restart
+
+        inv.set_mode_allow_discharge()
+
+        assert inv.client.store[ADDR_MIN_SOC] == 150
+
+    def test_allow_discharge_skips_write_when_already_restored(
+        self, make_min_soc_victron
+    ):
+        """No needless settings write when 2901 already holds the target."""
+        inv = make_min_soc_victron()
+        inv.client.store[ADDR_MIN_SOC] = 150
+
+        inv.set_mode_allow_discharge()
+
+        assert ADDR_MIN_SOC not in [addr for addr, _ in inv.client.writes]
+
+    def test_avoid_discharge_after_force_charge_leaves_external_control(
+        self, make_min_soc_victron
+    ):
+        """From force charge, ESS returns to normal mode before the hold."""
+        inv = make_min_soc_victron()
+        inv.set_mode_force_charge(3000)
+        assert inv.client.store[ADDR_HUB4MODE] == 3
+
+        inv.set_mode_avoid_discharge()
+        inv.stop_vebus_keepalive(write_zero=False)
+
+        assert inv.client.store[ADDR_HUB4MODE] == 1
+        assert inv.client.store[ADDR_MIN_SOC] == 620
+        hub4_write = max(
+            i
+            for i, (addr, val) in enumerate(inv.client.writes)
+            if addr == ADDR_HUB4MODE and val == 1
+        )
+        min_soc_write = max(
+            i for i, (addr, _) in enumerate(inv.client.writes) if addr == ADDR_MIN_SOC
+        )
+        assert hub4_write < min_soc_write
+
+    def test_force_charge_releases_min_soc_hold(self, make_min_soc_victron):
+        """Switching to grid charging does not leave the raised minimum behind."""
+        inv = make_min_soc_victron()
+        inv.set_mode_avoid_discharge()
+
+        inv.set_mode_force_charge(3000)
+        inv.stop_vebus_keepalive(write_zero=False)
+
+        assert inv.client.store[ADDR_MIN_SOC] == 150
+
+    def test_shutdown_restores_min_soc(self, make_min_soc_victron):
+        """Shutdown resets reg 2901 before restoring the ESS mode."""
+        inv = make_min_soc_victron()
+        inv.set_mode_avoid_discharge()
+
+        inv.shutdown()
+
+        assert inv.client.store[ADDR_MIN_SOC] == 150
+        assert inv.client.closed
+
+    def test_min_soc_readback_compares_raw_words(self, make_min_soc_victron):
+        """Reg 2901 is verified as raw tenths of a percent, not via decode().
+
+        RegisterDef.decode() multiplies by the scalefactor, which would turn raw
+        620 into 6200 and fail every verification.
+        """
+        inv = make_min_soc_victron()
+        rdef = REGISTERS[Reg.SETTINGS_Settings_CGwacs_BatteryLife_MinimumSocLimit]
+        assert rdef.decode([620]) != 62  # the trap this path avoids
+
+        inv._write_min_soc_pct(62)  # pylint: disable=protected-access
+
+        assert inv.client.store[ADDR_MIN_SOC] == 620
+        assert inv._read_min_soc_pct() == 62  # pylint: disable=protected-access
+
+    def test_missing_battery_min_soc_uses_default(self, make_min_soc_victron):
+        """Without a battery minimum the restore target falls back to 5 %."""
+        inv = make_min_soc_victron(battery_min_soc_percentage=None)
+        assert inv.restore_min_soc_pct == 5.0
+
+    def test_min_soc_follows_a_battery_that_charges_during_the_hold(
+        self, make_min_soc_victron
+    ):
+        """DC-coupled PV charges on; the minimum has to come along.
+
+        ESS allows discharge again a few percent above its minimum, so a minimum
+        left at the SoC the hold started from ends the hold by itself.
+        """
+        inv = make_min_soc_victron()
+        inv.set_mode_avoid_discharge()
+        assert inv.client.store[ADDR_MIN_SOC] == 620
+
+        inv.client.store[ADDR_SOC] = 70
+        inv._raise_min_soc_to_soc()  # pylint: disable=protected-access
+
+        assert inv.client.store[ADDR_MIN_SOC] == 700
+
+    def test_a_dip_in_soc_does_not_lower_the_hold(self, make_min_soc_victron):
+        """Ratchet up only - following the battery down would release it."""
+        inv = make_min_soc_victron()
+        inv.set_mode_avoid_discharge()
+
+        inv.client.store[ADDR_SOC] = 58
+        inv._raise_min_soc_to_soc()  # pylint: disable=protected-access
+
+        assert inv.client.store[ADDR_MIN_SOC] == 620
+
+    def test_a_standing_soc_writes_nothing(self, make_min_soc_victron):
+        """Reg 2901 is a stored setting; an unchanged target must not rewrite it."""
+        inv = make_min_soc_victron()
+        inv.set_mode_avoid_discharge()
+        writes_before = len(inv.client.writes)
+
+        inv._raise_min_soc_to_soc()  # pylint: disable=protected-access
+
+        assert len(inv.client.writes) == writes_before
+
+    def test_the_refresh_loop_raises_the_minimum_on_its_own(
+        self, make_min_soc_victron, monkeypatch
+    ):
+        """The hold keeps itself current without another mode change.
+
+        raising=False on purpose: without the refresh this test is left stating
+        the behaviour an implementation that never raises the minimum fails on,
+        rather than erroring on a name it does not have. A renamed constant still
+        fails it - the loop then ticks once a minute and the assert stands.
+        """
+        monkeypatch.setattr(
+            victron_mod, "_MIN_SOC_REFRESH_INTERVAL_S", 0.01, raising=False
+        )
+        inv = make_min_soc_victron()
+        inv.set_mode_avoid_discharge()
+
+        inv.client.store[ADDR_SOC] = 75
+        deadline = time.time() + 5.0
+        while time.time() < deadline and inv.client.store[ADDR_MIN_SOC] != 750:
+            _real_sleep(0.01)
+
+        assert inv.client.store[ADDR_MIN_SOC] == 750
+
+    def test_allow_discharge_stops_the_refresh(self, make_min_soc_victron, monkeypatch):
+        """No tick may write the hold back onto a released device."""
+        monkeypatch.setattr(victron_mod, "_MIN_SOC_REFRESH_INTERVAL_S", 0.01)
+        inv = make_min_soc_victron()
+        inv.set_mode_avoid_discharge()
+
+        inv.set_mode_allow_discharge()
+        assert inv._min_soc_refresh_thread is None  # pylint: disable=protected-access
+
+        inv.client.store[ADDR_SOC] = 80
+        _real_sleep(0.1)
+
+        assert inv.client.store[ADDR_MIN_SOC] == 150
+
+    def test_a_fresh_hold_starts_from_the_current_soc(self, make_min_soc_victron):
+        """A hold ratcheted to 75 % must not pin the next one up there."""
+        inv = make_min_soc_victron()
+        inv.set_mode_avoid_discharge()
+        inv.client.store[ADDR_SOC] = 75
+        inv._raise_min_soc_to_soc()  # pylint: disable=protected-access
+        inv.set_mode_allow_discharge()
+
+        inv.client.store[ADDR_SOC] = 40
+        inv.set_mode_avoid_discharge()
+
+        assert inv.client.store[ADDR_MIN_SOC] == 400
+
+    def test_a_failing_tick_leaves_the_hold_standing(
+        self, make_min_soc_victron, monkeypatch, caplog
+    ):
+        """A modbus hiccup must not end the hold - the device keeps the minimum."""
+        monkeypatch.setattr(victron_mod, "_MIN_SOC_REFRESH_INTERVAL_S", 0.01)
+        inv = make_min_soc_victron()
+        inv.set_mode_avoid_discharge()
+
+        def _boom():
+            raise RuntimeError("read error for SYSTEM_Dc_Battery_Soc")
+
+        with caplog.at_level(logging.WARNING):
+            monkeypatch.setattr(inv, "_raise_min_soc_to_soc", _boom)
+            _real_sleep(0.1)
+
+        assert inv.client.store[ADDR_MIN_SOC] == 620
+        # pylint: disable-next=protected-access
+        assert inv._min_soc_refresh_thread.is_alive()
+        assert "Could not refresh ESS minimum SoC" in caplog.text
