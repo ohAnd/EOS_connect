@@ -960,6 +960,32 @@ if soc &lt; 20 and not override_active:
                         all. And because none of these fields hot-reload, changing one through
                         <code>PUT /api/config/</code> stores the value but leaves the running optimizer on the
                         old one until you restart. There is no MQTT topic for them.</p>
+
+                    <h3 id="grid-charge-limit">Grid charging versus battery charging</h3>
+                    <p>The battery and the inverter set two separate charge limits.
+                        <code>battery.max_charge_power_w</code> is what the battery accepts;
+                        <code>inverter.max_grid_charge_rate</code> is what the inverter can convert from the
+                        grid into the battery. In a DC-coupled or hybrid system (Fronius GEN24, Victron with
+                        MPPT chargers) PV charges the battery without passing that converter, so PV and grid
+                        charge add up: the battery can take its full limit while only part of it comes from
+                        the grid.</p>
+
+                    <ul>
+                        <li><code>local_evopt</code> plans every slot with <em>charge &le; PV + grid charge
+                                rate</em>. A slot where the battery cannot exceed that bound anyway &mdash;
+                            every system whose grid charge rate is at least the battery's limit &mdash; gets no
+                            extra constraint.</li>
+                        <li><code>eos_server</code> receives the rate as the inverter's
+                            <code>max_ac_charge_power_w</code>, where the EOS server knows that setting
+                            (builds from 2026-02-27 on, including 0.3.0). Older servers do not get the field.</li>
+                        <li>External <code>evopt</code> has no such setting. It plans grid charging
+                            at the battery's limit, inside the import limit above.</li>
+                    </ul>
+
+                    <p>With AC-coupled PV every watt passes the battery inverter, so the bound is generous;
+                        there both limits are normally the same number anyway. A <code>0</code> leaves the
+                        plan without a grid charge limit. Whatever the plan says, the running control loop
+                        caps every grid charge setpoint at <code>inverter.max_grid_charge_rate</code>.</p>
                 </div>
 
                 <div class="content-section">

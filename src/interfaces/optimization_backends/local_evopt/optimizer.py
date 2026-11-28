@@ -213,6 +213,9 @@ class GridConfig:
     p_max_imp: Optional[float] = None
     p_max_exp: Optional[float] = None
     prc_p_exc_imp: Optional[float] = None
+    # Power in W the batteries can draw from the grid - the inverter's grid charge
+    # rate (EOS_connect extension). None = only the battery limits apply.
+    p_max_grid_charge: Optional[float] = None
 
 
 @dataclass
@@ -499,6 +502,7 @@ class Optimizer:
         self._setup_target_function()
         self._add_energy_balance_constraints()
         self._add_battery_constraints()
+        self._add_grid_charge_constraints()
         self._add_managed_load_constraints()
         self._add_shared_budget_constraints()
         self._add_exclusive_group_constraints()
@@ -1183,6 +1187,36 @@ class Optimizer:
                     self.variables['s'][i][self.T - 1] + self.variables['s_reserve_pen'][i]
                     >= bat.s_reserve
                 )
+
+    def _add_grid_charge_constraints(self):
+        """
+        Charge beyond the slot's PV has to come from the grid, through the inverter.
+
+        Battery and inverter set two different limits: the battery takes c_max, the
+        inverter converts at most p_max_grid_charge from AC to DC. A DC-coupled or
+        hybrid system charges from PV past the inverter, so only the grid part of the
+        charge is capped - that is ``charge - PV <= rate``, exactly. With AC-coupled PV
+        every watt passes the inverter and the bound is generous, never too tight.
+
+        A slot whose batteries cannot exceed the bound anyway gets no constraint, so
+        the model of a system with rate >= c_max stays exactly what it was.
+        """
+        rate = self.grid.p_max_grid_charge
+        if rate is None or rate <= 0:
+            return
+        chargeable = [i for i, bat in enumerate(self.batteries) if bat.charge_from_grid]
+        if not chargeable:
+            return
+        for t in self.time_steps:
+            dt_h = self.time_series.dt[t] / 3600.0
+            ceiling = max(0.0, self.time_series.ft[t]) + rate * dt_h
+            reachable = sum(self.batteries[i].c_max_at(t) for i in chargeable) * dt_h
+            if reachable <= ceiling:
+                continue
+            self.problem += (
+                pulp.lpSum(self.variables['c'][i][t] for i in chargeable) <= ceiling,
+                f"grid_charge_{t}",
+            )
 
     def _add_managed_load_constraints(self):
         """

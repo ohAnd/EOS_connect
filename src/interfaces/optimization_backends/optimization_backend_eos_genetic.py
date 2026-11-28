@@ -177,6 +177,47 @@ def supports_device_profiles(base_url, timeout=10):
     return isinstance(schemas, dict) and _DEVICE_PROFILE_SCHEMA in schemas
 
 
+#: The inverter setting that caps grid (AC) charging separately from the battery.
+AC_CHARGE_LIMIT_KEY = "max_ac_charge_power_w"
+
+
+def supports_ac_charge_limit(base_url, timeout=10):
+    """
+    Whether this EOS server knows an inverter AC charge limit.
+
+    EOS caps the planned grid charge with ``max_ac_charge_power_w`` since a
+    0.2.0 dev build of 2026-02-27 - after the 0.2.0 release, so a version
+    comparison cannot tell. 0.2.0 itself rejects the unknown key with HTTP 422
+    (its request models forbid extra fields), which is why it is asked and not
+    sent blindly: any schema carrying the property means the server reads it.
+
+    Returns:
+        bool: True when some schema of the server has the property. An
+        unreachable server returns False - the key is then left out, which is
+        what every server before it expects.
+    """
+    try:
+        schemas = (
+            _fetch_openapi(base_url, timeout).get("components", {}).get("schemas", {})
+        )
+    except (requests.exceptions.RequestException, ValueError, AttributeError) as err:
+        logger.warning(
+            "[OPT-EOS] Could not ask the EOS server at %s for its inverter schema "
+            "(%s: %s) - planning grid charge without the inverter limit",
+            base_url,
+            type(err).__name__,
+            err,
+        )
+        return False
+    if not isinstance(schemas, dict):
+        return False
+    return any(
+        isinstance(schema, dict)
+        and AC_CHARGE_LIMIT_KEY in (schema.get("properties") or {})
+        for schema in schemas.values()
+    )
+
+
 def _to_profile_settings(group, settings):
     """
     Rewrite flat device settings into the shape of a server with profiles.

@@ -2240,8 +2240,10 @@ _ALL_FIELDS: list[FieldDef] = [
         section="inverter",
         level="standard",
         description=(
-            "Maximum inverter grid charge rate in W — not exposed by EVCC even "
-            "when EVCC controls the battery, so this stays manual"
+            "Maximum inverter grid charge rate in W — caps grid charging in the "
+            "plan (local_evopt, EOS server) and at the inverter; PV can charge on "
+            "top up to the battery limit. Not exposed by EVCC even when EVCC "
+            "controls the battery, so this stays manual"
         ),
         labels=["restart_required"],
         help_url="config-battery.html#inverter",

@@ -105,6 +105,9 @@ class OptimizationInterface:
                 terminal_soc_value=_terminal_soc_value,
                 max_grid_import_w=_max_imp,
                 max_grid_export_w=_max_exp,
+                # The raw setting, not the attribute: its "or 5000" would turn an
+                # explicit 0 into a limit.
+                max_grid_charge_w=inverter_max_grid_charge_rate_w,
                 plan_stability_weight=config.get(
                     "local_evopt_plan_stability_weight", 0.25
                 ),
