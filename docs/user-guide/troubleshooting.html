@@ -254,6 +254,29 @@ KeyError: 0</code></pre>
                             <a href="config-solar.html#pv-forecast-sources">Who supplies the
                                 forecast</a>.</p>
 
+                        <h3 id="tb-forecast-outage">The forecast service is unreachable for hours</h3>
+                        <p><strong>Symptom:</strong> the internet connection or DNS of the host is
+                            down, and the log repeats every cycle:</p>
+                        <pre><code>[PV-IF] OpenMeteo Solar Forecast connection error: Cannot connect to host api.open-meteo.com:443
+[PV-IF] Using cached PV forecast due to API error: ...
+[PV-IF] Temperature forecast API failed - keeping the last fetched forecast (failure 3/24)</code></pre>
+                        <p><strong>What EOS Connect does:</strong> it keeps planning with the last
+                            forecasts it fetched. With several PV installations, each one that fails
+                            falls back to its own last curve, so the total stays what it was
+                            &mdash; also when only some of them fail. The outside-temperature
+                            forecast is held for up to 24 cycles (about six hours at the default
+                            interval); after that the 15&nbsp;&deg;C placeholder is used, and managed
+                            loads with an outdoor sensor of their own switch to that sensor. A
+                            held curve is shifted at midnight, so it keeps describing the right
+                            day; one older than a day is replaced by the default.</p>
+                        <p><strong>Earlier versions</strong> added the summed forecast into itself
+                            once per installation on every failed cycle: with four installations
+                            the PV forecast grew fourfold every 15&nbsp;minutes, until the optimizer
+                            reported <code>Infeasible</code> on every run. They also dropped the
+                            temperature to 15&nbsp;&deg;C at once, so a heated house looked as if it
+                            needed no heat. If that happened to you, the PV auto-scaling leaves the
+                            affected hours out of its factors by itself &mdash; nothing to reset.</p>
+
                         <h3 id="tb-pv-key">Forecast.Solar rejects the API key</h3>
                         <p><strong>Symptom:</strong> the PV forecast never updates and the log
                             repeats, once per cycle:</p>

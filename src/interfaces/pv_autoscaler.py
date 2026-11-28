@@ -50,6 +50,17 @@ TIMEFRAME_IDS = tuple(range(1, len(TIMEFRAME_START_HOURS) + 1))
 # and would otherwise generate thousands of rows from a single reading.
 MAX_MISSED_HOURS = 48
 
+# A forecast hour above this many times the installed peak power (kWh per hour per kWp)
+# is not a forecast. It is what a corrupted array looks like - a fallback that summed
+# the cached total into itself once per installation grew the curve fourfold every
+# 15 minutes and recorded petawatt-hours - and a single such hour would pull its
+# timeframe's factor to the lower clamp for the whole retention window. The margin
+# is wide on purpose: the installed power can be a placeholder for sources that never
+# use it, and only an absurd value has to be caught, not a merely optimistic one.
+IMPLAUSIBLE_FORECAST_PER_KWP = 10.0
+# Floor for the bound above, and the bound itself when no installed power is known.
+IMPLAUSIBLE_FORECAST_MIN_KWH = 50.0
+
 
 def _day_origin(origins: set) -> str:
     """
@@ -507,6 +518,17 @@ class PvAutoscaler:
                 # merely used to coincide with. Do not sync the two.
                 if total_kwh > 0 or prev_hour_local < 6 or prev_hour_local >= 18:
                     forecast_kwh = float(total_kwh)
+                # Stored as it is - the aggregation leaves its timeframe out of the
+                # scaling - but said here, where it is still news.
+                if forecast_kwh is not None and forecast_kwh > self._implausible_forecast_kwh():
+                    logger.warning(
+                        "[PV-AUTO] Forecast for %s %02d:00 is %.1f kWh - not plausible"
+                        " for the installed power; that part of the day will not count"
+                        " towards the scale factors",
+                        prev_date_local,
+                        prev_hour_local,
+                        forecast_kwh,
+                    )
         except (TypeError, ValueError, IndexError, AttributeError):
             logger.exception("[PV-AUTO] Error reading raw forecast from PvInterface")
 
@@ -779,12 +801,31 @@ class PvAutoscaler:
             "origin": origin,
         }
 
+    def _implausible_forecast_kwh(self) -> float:
+        """Forecast kWh for one hour above which the value cannot be a forecast."""
+        nominal_w = 0.0
+        for entry in getattr(self._pv_interface, "config", None) or []:
+            try:
+                nominal_w += float(entry.get("power") or 0.0)
+            except (AttributeError, TypeError, ValueError):
+                continue
+        return max(
+            IMPLAUSIBLE_FORECAST_PER_KWP * nominal_w / 1000.0,
+            IMPLAUSIBLE_FORECAST_MIN_KWH,
+        )
+
     def _aggregate_by_day_and_timeframe(self, rows, keep_date, count_hours=False):
         """
         Sum actual and forecast kWh per (date, timeframe) for the rows `keep_date` accepts.
 
         A timeframe is present in a day's dict only when at least one row contributed a
         non-NULL value, so callers can tell "recorded as zero" apart from "not recorded".
+
+        A timeframe holding an implausible forecast hour (see
+        ``IMPLAUSIBLE_FORECAST_PER_KWP``) loses its forecast for that day altogether,
+        which keeps the day out of that timeframe's factor: dropping only the bad hour
+        would leave its measured yield on one side of the ratio and nothing on the
+        other. This also cleans history that was recorded before the cause was fixed.
 
         Also returns the set of row origins seen per day, so a day restored from a
         backup is not presented as one this system measured.
@@ -793,6 +834,8 @@ class PvAutoscaler:
         forecast: Dict[str, Dict[int, float]] = defaultdict(dict)
         hours: Dict[str, set] = defaultdict(set)
         origins: Dict[str, set] = defaultdict(set)
+        implausible: Dict[str, set] = defaultdict(set)
+        limit_kwh = self._implausible_forecast_kwh()
         recorded_hours = 0
 
         for raw in rows:
@@ -811,8 +854,24 @@ class PvAutoscaler:
                     except (TypeError, ValueError):
                         pass
             if row["forecast_kwh"] is not None:
+                value = float(row["forecast_kwh"])
+                if not math.isfinite(value) or value > limit_kwh:
+                    implausible[date].add(tf)
+                    continue
                 bucket = forecast[date]
-                bucket[tf] = bucket.get(tf, 0.0) + float(row["forecast_kwh"])
+                bucket[tf] = bucket.get(tf, 0.0) + value
+
+        for date, timeframes in implausible.items():
+            for tf in timeframes:
+                if date in forecast:
+                    forecast[date].pop(tf, None)
+            logger.debug(
+                "[PV-AUTO] %s: forecast above %.0f kWh in an hour - timeframe(s) %s"
+                " left out of the scaling",
+                date,
+                limit_kwh,
+                sorted(timeframes),
+            )
 
         return actual, forecast, hours, recorded_hours, origins
 
