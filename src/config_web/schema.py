@@ -1011,8 +1011,9 @@ _ALL_FIELDS: list[FieldDef] = [
         default=0,
         section="eos",
         level="expert",
-        description="Maximum grid import power (0 = no limit, uses inverter limit). "
-        "Use for grid connection limits.",
+        description="Maximum grid import power in W, for a limited grid connection "
+        "(0 = no limit). Grid charging is capped separately by "
+        "inverter.max_grid_charge_rate.",
         help_url="config-optimizer.html#eos",
         validation={"min": 0, "max": 100000},
         depends_on={"eos.source": "local_evopt"},

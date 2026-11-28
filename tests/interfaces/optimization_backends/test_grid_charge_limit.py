@@ -218,6 +218,80 @@ def test_an_explicit_zero_does_not_become_the_default_rate():
 
 
 # ---------------------------------------------------------------------------
+# local_evopt: the import limit no longer stands in for the grid charge rate
+# ---------------------------------------------------------------------------
+
+
+def test_an_unset_import_limit_leaves_the_house_unlimited():
+    """
+    0 used to fall back to the grid charge rate, capping the whole house - load
+    peaks and managed loads included - at what the inverter charges with.
+    """
+    interface = OptimizationInterface(
+        {"source": "local_evopt", "local_evopt_max_grid_import_w": 0},
+        3600,
+        BERLIN,
+        inverter_max_grid_charge_rate_w=5000,
+        inverter_max_pv_charge_rate_w=5000,
+    )
+    assert interface.backend.max_grid_import_w is None
+    assert interface.backend.max_grid_charge_w == 5000, "grid charging still capped"
+    assert interface.backend.max_grid_export_w == 5000, "export fallback unchanged"
+
+
+def test_a_set_import_limit_is_kept():
+    interface = OptimizationInterface(
+        {"source": "local_evopt", "local_evopt_max_grid_import_w": 11000},
+        3600,
+        BERLIN,
+        inverter_max_grid_charge_rate_w=5000,
+    )
+    assert interface.backend.max_grid_import_w == 11000
+
+
+def test_external_evopt_still_falls_back_to_the_grid_charge_rate():
+    """It has no separate grid charge limit; the import limit is all it has."""
+    interface = OptimizationInterface(
+        {
+            "source": "evopt",
+            "server": "localhost",
+            "port": 7050,
+            "external_evopt_max_grid_import_w": 0,
+        },
+        3600,
+        BERLIN,
+        inverter_max_grid_charge_rate_w=5000,
+    )
+    assert interface.backend.max_grid_import_w == 5000
+
+
+def test_a_load_peak_above_the_charge_rate_is_no_violation():
+    """An 8 kW slot with an empty battery: imported, not reported as a broken limit."""
+    battery = _battery(s_initial=0, s_min=0)
+    ts = TimeSeriesData(
+        dt=[3600] * 2,
+        gt=[8000.0, 500.0],
+        ft=[0.0, 0.0],
+        p_N=[0.0003, 0.0003],
+        p_E=[0.0, 0.0],
+    )
+    result = Optimizer(
+        strategy=OptimizationStrategy(
+            charging_strategy="none", discharging_strategy="none"
+        ),
+        grid=GridConfig(p_max_grid_charge=5000),
+        batteries=[battery],
+        time_series=ts,
+    ).solve()
+
+    assert result["status"] == "Optimal"
+    # the whole peak from the grid, plus grid charging at exactly the inverter rate
+    assert result["grid_import"][0] == pytest.approx(8000.0 + 5000.0, abs=1.0)
+    assert result["batteries"][0]["charging_power"][0] == pytest.approx(5000.0, abs=1.0)
+    assert not result["limit_violations"]["grid_import_limit_exceeded"]
+
+
+# ---------------------------------------------------------------------------
 # EOS server: the native inverter setting
 # ---------------------------------------------------------------------------
 

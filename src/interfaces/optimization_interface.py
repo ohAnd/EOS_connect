@@ -77,9 +77,12 @@ class OptimizationInterface:
             _max_imp = config.get("local_evopt_max_grid_import_w") or 0
             _max_exp = config.get("local_evopt_max_grid_export_w") or 0
 
-            # Smart defaults: if grid limits are 0 (not configured), use inverter limits
-            if not _max_imp or _max_imp <= 0:
-                _max_imp = self.inverter_max_grid_charge_rate_w
+            # Import: 0 means no limit. The grid charge rate used to stand in here,
+            # but as an import limit it capped the whole house - load peaks and
+            # managed loads included - at the inverter's charge rate. The solver
+            # now bounds grid charging with that rate directly (max_grid_charge_w).
+            _max_imp = _max_imp if _max_imp > 0 else None
+            # Export: 0 still falls back to the inverter limit.
             if not _max_exp or _max_exp <= 0:
                 _max_exp = self.inverter_max_pv_charge_rate_w
             # Extract strategies to comply with line length limits
