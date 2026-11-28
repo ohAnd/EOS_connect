@@ -16,13 +16,17 @@ import pytz
 
 try:  # running from src/ as a script - src/ is on sys.path
     from interfaces.optimization_backends.optimization_backend_eos_genetic import (
+        AC_CHARGE_LIMIT_KEY,
         EOSGeneticPath,
+        supports_ac_charge_limit,
         supports_device_profiles,
         supports_genetic_optimize,
     )
 except ImportError:  # imported as src.interfaces... (tests)
     from .optimization_backend_eos_genetic import (
+        AC_CHARGE_LIMIT_KEY,
         EOSGeneticPath,
+        supports_ac_charge_limit,
         supports_device_profiles,
         supports_genetic_optimize,
     )
@@ -60,6 +64,8 @@ class EOSBackend:
         self.last_optimization_runtime_number = 0
         self.eos_version = "0.0.2"  # default
         self._genetic_path = None
+        # Whether the server reads inverter.max_ac_charge_power_w; asked once below.
+        self._ac_charge_limit_supported = False
         try:
             self.eos_version = self._retrieve_eos_version()
             # if self.eos_version in ["0.1.0+dev", "0.2.0+dev"]:
@@ -124,6 +130,9 @@ class EOSBackend:
                     )
 
                 self.__ensure_ev_charge_rates()
+                self._ac_charge_limit_supported = supports_ac_charge_limit(
+                    self.base_url
+                )
                 # EOS marks the endpoint this backend grew up on deprecated, so
                 # wherever the current one is available it is the one used - for
                 # hourly runs too, not only for the quarter-hourly slots that
@@ -349,6 +358,7 @@ class EOSBackend:
         Send the optimize request to the EOS server.
         Returns (response_json, avg_runtime)
         """
+        eos_request = self._drop_unsupported_inverter_keys(eos_request)
         if self._genetic_path is not None:
             return self._genetic_path.optimize(eos_request, timeout)
         # Adjust all arrays for DST before sending to EOS server.
@@ -456,6 +466,27 @@ class EOSBackend:
                 "error": f"Request to the EOS server at {self.base_url} failed "
                 "- see the log for details, will try again with next cycle"
             }, None
+
+    def _drop_unsupported_inverter_keys(self, eos_request):
+        """
+        Leave the inverter's AC charge limit out where the server does not read it.
+
+        EOS Connect always puts ``inverter.max_grid_charge_rate`` into the request,
+        so a server that knows the limit plans grid charging at what the inverter
+        really delivers. A server that does not would reject the request (0.2.0
+        answers HTTP 422), so the key goes before it is sent. The caller's request
+        is not modified.
+        """
+        inverter = eos_request.get("inverter")
+        if (
+            self._ac_charge_limit_supported
+            or not isinstance(inverter, dict)
+            or AC_CHARGE_LIMIT_KEY not in inverter
+        ):
+            return eos_request
+        stripped = dict(inverter)
+        del stripped[AC_CHARGE_LIMIT_KEY]
+        return {**eos_request, "inverter": stripped}
 
     def __get_config_path(self, path):
         """

@@ -1255,6 +1255,15 @@ def create_optimize_request():
         wechselrichter_object = {
             "max_power_wh": config_manager.config["inverter"]["max_pv_charge_rate"],
         }
+        # The grid charge rate caps the planned grid charge on its own, apart from the
+        # battery's limit, which still holds for PV charging (#390). Left out at 0:
+        # EOS reads 0 as "no AC charging at all". The EOS backend drops the key for a
+        # server that does not know it.
+        max_grid_charge_rate = config_manager.config["inverter"].get(
+            "max_grid_charge_rate", 0
+        )
+        if max_grid_charge_rate and max_grid_charge_rate > 0:
+            wechselrichter_object["max_ac_charge_power_w"] = max_grid_charge_rate
         if eos_interface.is_eos_version_at_least("0.0.2"):
             wechselrichter_object = {
                 "device_id": "inverter1",

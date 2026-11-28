@@ -107,6 +107,9 @@ class LocalEVOptBackend(EVOptBackend):
                                   one of TERMINAL_SOC_VALUES.
         max_grid_import_w:        Hard grid import power ceiling in Watts (None = unlimited).
         max_grid_export_w:        Hard grid export power ceiling in Watts (None = unlimited).
+        max_grid_charge_w:        Power in Watts the batteries can draw from the grid -
+                                  inverter.max_grid_charge_rate (None or 0 = no limit
+                                  beyond the battery's own).
     """
 
     def __init__(
@@ -121,6 +124,7 @@ class LocalEVOptBackend(EVOptBackend):
         terminal_soc_value=DEFAULT_TERMINAL_SOC_VALUE,
         max_grid_import_w=None,
         max_grid_export_w=None,
+        max_grid_charge_w=None,
         plan_stability_weight=plan_stability.DEFAULT_WEIGHT,
         plan_stability_scope=plan_stability.SCOPE_MANAGED_LOADS,
     ):
@@ -144,6 +148,9 @@ class LocalEVOptBackend(EVOptBackend):
         self.emergency_reserve_pct = max(0, min(80, int(emergency_reserve_pct or 0)))
         self.max_grid_import_w = max_grid_import_w
         self.max_grid_export_w = max_grid_export_w
+        self.max_grid_charge_w = (
+            max_grid_charge_w if (max_grid_charge_w or 0) > 0 else None
+        )
         # Plan stability: hot-reloadable like the strategies above. The memory lives
         # here because this object outlives every run, the optimizer does not.
         self.plan_stability_weight = plan_stability_weight
@@ -507,6 +514,7 @@ class LocalEVOptBackend(EVOptBackend):
             p_max_imp=self.max_grid_import_w,  # None = no limit (no binary vars added)
             p_max_exp=self.max_grid_export_w,  # None = no limit (no binary vars added)
             prc_p_exc_imp=_prc_raw if _prc_raw else None,
+            p_max_grid_charge=getattr(self, "max_grid_charge_w", None),
         )
 
         batteries = []

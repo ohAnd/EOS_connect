@@ -1011,8 +1011,9 @@ _ALL_FIELDS: list[FieldDef] = [
         default=0,
         section="eos",
         level="expert",
-        description="Maximum grid import power (0 = no limit, uses inverter limit). "
-        "Use for grid connection limits.",
+        description="Maximum grid import power in W, for a limited grid connection "
+        "(0 = no limit). Grid charging is capped separately by "
+        "inverter.max_grid_charge_rate.",
         help_url="config-optimizer.html#eos",
         validation={"min": 0, "max": 100000},
         depends_on={"eos.source": "local_evopt"},
@@ -2240,8 +2241,10 @@ _ALL_FIELDS: list[FieldDef] = [
         section="inverter",
         level="standard",
         description=(
-            "Maximum inverter grid charge rate in W — not exposed by EVCC even "
-            "when EVCC controls the battery, so this stays manual"
+            "Maximum inverter grid charge rate in W — caps grid charging in the "
+            "plan (local_evopt, EOS server) and at the inverter; PV can charge on "
+            "top up to the battery limit. Not exposed by EVCC even when EVCC "
+            "controls the battery, so this stays manual"
         ),
         labels=["restart_required"],
         help_url="config-battery.html#inverter",

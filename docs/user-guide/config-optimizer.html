@@ -139,7 +139,9 @@
                         <p>If your grid connection is limited, cap it explicitly with
                             <code>eos.local_evopt_max_grid_import_w</code> and
                             <code>eos.local_evopt_max_grid_export_w</code>. Both default to
-                            <code>0</code>, meaning "use the inverter's own limit".
+                            <code>0</code>: no import limit, and an export limit taken from
+                            <code>inverter.max_pv_charge_rate</code>. Grid charging is capped by
+                            <code>inverter.max_grid_charge_rate</code> either way.
                             <code>eos.local_evopt_num_threads</code> sets how many threads the CBC
                             solver uses; <code>0</code> means automatic.</p>
                         <p>The solver's time is one budget per optimization, shared by every run of
